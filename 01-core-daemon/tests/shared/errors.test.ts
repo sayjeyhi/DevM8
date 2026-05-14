@@ -58,6 +58,6 @@ describe("launchctlHint", () => {
 
   it("returns fallback hint for unknown errors", () => {
     const hint = launchctlHint("some unknown error")
-    expect(hint).toContain("jira-assistant status")
+    expect(hint).toBe("launchctl exited with a non-zero status")
   })
 })

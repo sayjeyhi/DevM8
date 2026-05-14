@@ -27,5 +27,5 @@ export function launchctlHint(stderr: string): string {
   if (s.includes("permission denied")) {
     return "Check file permissions on the plist"
   }
-  return "Run `jira-assistant status` for more info"
+  return "launchctl exited with a non-zero status"
 }
