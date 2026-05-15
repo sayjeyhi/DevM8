@@ -1,1 +1,22 @@
-export {}
+import type { Context } from "grammy"
+
+export const HELP_TEXT = `Jira Assistant Commands:
+
+/create <title> [-- <description>]
+  Create a Jira issue. Claude enriches the description if provided.
+
+/move <issue-key> <status>
+  Transition an issue to a new status (e.g. "In Progress").
+
+/comment <issue-key> <text>
+  Add a comment to an existing issue.
+
+/solve <issue-key>
+  Analyze an issue with Claude and post a solution as a comment.
+
+/help
+  Show this reference.`
+
+export async function handleHelp(ctx: Context): Promise<void> {
+  await ctx.reply(HELP_TEXT)
+}
