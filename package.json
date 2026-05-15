@@ -1,0 +1,19 @@
+{
+  "name": "jira-assistant",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "bun run build.ts",
+    "test": "bun test tests/",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "smol-toml": "^1.6.1",
+    "zod": "^4.4.3",
+    "@clack/prompts": "^1.4.0",
+    "citty": "^0.2.2",
+    "grammy": "^1.36.0",
+    "@grammyjs/commands": "^1.0.0",
+    "@grammyjs/transformer-throttler": "^1.0.0",
+    "@grammyjs/auto-retry": "^2.0.0"
+  }
+}
