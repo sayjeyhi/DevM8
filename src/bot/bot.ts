@@ -14,10 +14,6 @@ export async function startBotFromConfig(
   signal: AbortSignal,
   logger: Logger,
 ): Promise<void> {
-  if (config.claude.api_key) {
-    process.env.ANTHROPIC_API_KEY = config.claude.api_key
-  }
-
   const jiraLog = {
     info: (obj: object) => logger.info("jira", obj as Record<string, unknown>),
     error: (obj: object) => logger.error("jira error", obj as Record<string, unknown>),
