@@ -136,6 +136,21 @@ export class JiraClient {
     })
   }
 
+  async getMyIssues(limit = 10): Promise<JiraIssue[]> {
+    const jql = encodeURIComponent('assignee = currentUser() ORDER BY updated DESC')
+    const response = await this.request<{
+      issues: Array<{ key: string; fields: { summary: string; status: { name: string } } }>
+    }>('GET', `search?jql=${jql}&maxResults=${limit}&fields=summary,status`)
+
+    return response.issues.map(issue => ({
+      key: issue.key,
+      summary: issue.fields.summary,
+      status: issue.fields.status.name,
+      description: '',
+      url: `https://${this.config.host}/browse/${issue.key}`,
+    }))
+  }
+
   async ping(): Promise<{ displayName: string; emailAddress: string }> {
     return this.request<{ displayName: string; emailAddress: string }>('GET', 'myself')
   }

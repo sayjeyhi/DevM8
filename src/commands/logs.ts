@@ -61,8 +61,8 @@ export default defineCommand({
     },
     follow: {
       type: "boolean",
-      description: "Follow log output (like tail -f)",
-      default: false,
+      description: "Follow log output (like tail -f) — enabled by default, use --no-follow to print and exit",
+      default: true,
       alias: "f",
     },
   },

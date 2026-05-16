@@ -7,6 +7,8 @@ import { handleMove } from "./move"
 import { handleComment } from "./comment"
 import { handleHelp } from "./help"
 import { handleSolve } from "./solve"
+import { handleLogs } from "./logs"
+import { handleMyTickets } from "./my-tickets"
 
 export interface Clients {
   jira: JiraClient
@@ -20,6 +22,8 @@ export async function registerCommands(bot: Bot, clients: Clients): Promise<void
   commands.command("move", "Move a ticket to a new status", ctx => handleMove(ctx, clients))
   commands.command("comment", "Add a comment to a ticket", ctx => handleComment(ctx, clients))
   commands.command("solve", "Ask Claude for a solution to a ticket", ctx => handleSolve(ctx, clients))
+  commands.command("my_tickets", "List your last 10 assigned Jira tickets", ctx => handleMyTickets(ctx, clients))
+  commands.command("logs", "Show recent daemon logs", ctx => handleLogs(ctx))
   commands.command("help", "Show available commands", ctx => handleHelp(ctx))
 
   bot.use(commands)

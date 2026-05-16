@@ -14,6 +14,12 @@ export const HELP_TEXT = `DevMate Commands:
 /solve <issue-key>
   Analyze an issue with Claude and post a solution as a comment.
 
+/my_tickets
+  List your last 10 assigned Jira tickets.
+
+/logs [n]
+  Show last n daemon log lines (default 50, max 200).
+
 /help
   Show this reference.`
 
