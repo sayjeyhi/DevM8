@@ -1,8 +1,10 @@
 import type { Context } from "grammy"
 import type { Clients } from "./index"
+import { keepTyping } from "../utils/typing"
 
 export async function handleMyTickets(ctx: Context, { jira }: Clients): Promise<void> {
-  const issues = await jira.getMyIssues(10)
+  const stopTyping = keepTyping(ctx)
+  const issues = await jira.getMyIssues(10).finally(stopTyping)
 
   if (issues.length === 0) {
     await ctx.reply("No tickets assigned to you.")

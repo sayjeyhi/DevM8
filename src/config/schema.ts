@@ -20,6 +20,7 @@ export const AppConfigSchema = z.object({
   }),
   claude: z.object({
     binary_path: z.string().min(1),
+    api_key: z.string().min(1).optional(),
   }),
   app: z.object({
     log_level: z.enum(["info", "debug", "error"]).default("info"),

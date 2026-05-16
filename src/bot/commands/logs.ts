@@ -1,10 +1,14 @@
 import type { Context } from "grammy"
 import { existsSync, readFileSync } from "node:fs"
 import { PATHS } from "../../shared/paths"
-import { splitMessage } from "../utils/splitMessage"
 
 const DEFAULT_LINES = 50
 const MAX_LINES = 200
+const CHUNK_LIMIT = 3900 // leave room for <pre> tags within Telegram's 4096 char limit
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
 
 function formatLine(raw: string): string {
   try {
@@ -18,6 +22,22 @@ function formatLine(raw: string): string {
   } catch {
     return raw
   }
+}
+
+function chunkLines(lines: string[]): string[] {
+  const chunks: string[] = []
+  let current = ""
+  for (const line of lines) {
+    const candidate = current ? `${current}\n${line}` : line
+    if (candidate.length > CHUNK_LIMIT) {
+      if (current) chunks.push(current)
+      current = line
+    } else {
+      current = candidate
+    }
+  }
+  if (current) chunks.push(current)
+  return chunks
 }
 
 export async function handleLogs(ctx: Context): Promise<void> {
@@ -37,10 +57,12 @@ export async function handleLogs(ctx: Context): Promise<void> {
     return
   }
 
-  const body = recent.map(formatLine).join("\n")
-  const header = `Last ${recent.length} log lines:\n\n`
+  const formatted = recent.map(formatLine)
+  const chunks = chunkLines(formatted)
+  const total = chunks.length
 
-  for (const chunk of splitMessage(header + body)) {
-    await ctx.reply(chunk)
+  for (let i = 0; i < chunks.length; i++) {
+    const prefix = total > 1 ? `[${i + 1}/${total}] Last ${recent.length} log lines:\n` : `Last ${recent.length} log lines:\n`
+    await ctx.reply(`${prefix}<pre>${escapeHtml(chunks[i])}</pre>`, { parse_mode: "HTML" })
   }
 }

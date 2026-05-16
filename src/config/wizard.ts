@@ -57,6 +57,10 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
         initialValue: existing?.claude.binary_path ?? (Bun.which("claude") ?? ""),
         validate: (v) => (v && existsSync(v)) ? undefined : "File not found at this path",
       }),
+      api_key: () => text({
+        message: "Anthropic API key (leave blank if claude is already logged in via `claude login`)",
+        initialValue: existing?.claude.api_key ?? "",
+      }),
     },
     {
       onCancel: () => { throw new FriendlyError("Setup cancelled.") },
@@ -69,7 +73,7 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
 
   const r = result as {
     bot_token: string; allowed_user_ids: string; base_url: string; api_token: string
-    email: string; project_key: string; binary_path: string
+    email: string; project_key: string; binary_path: string; api_key: string
   }
 
   outro("Setup complete!")
@@ -82,7 +86,7 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
   return {
     telegram: { bot_token: r.bot_token, allowed_user_ids: allowedUserIds },
     jira: { base_url: r.base_url, api_token: r.api_token, email: r.email, project_key: r.project_key },
-    claude: { binary_path: r.binary_path },
+    claude: { binary_path: r.binary_path, ...(r.api_key.trim() ? { api_key: r.api_key.trim() } : {}) },
     app: { log_level: existing?.app.log_level ?? "info" },
   }
 }

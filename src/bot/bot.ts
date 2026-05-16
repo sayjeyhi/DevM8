@@ -8,6 +8,7 @@ import { JiraClient } from "../jira/JiraClient"
 import { ClaudeClient } from "../claude/ClaudeClient"
 import type { AppConfig } from "../config/schema"
 import type { Logger } from "../logger/index"
+import { keepTyping } from "./utils/typing"
 
 export async function startBotFromConfig(
   config: AppConfig,
@@ -32,6 +33,9 @@ export async function startBotFromConfig(
     jiraLog,
   )
 
+  if (config.claude.api_key) {
+    process.env.ANTHROPIC_API_KEY = config.claude.api_key
+  }
   const claude = new ClaudeClient({ binaryPath: config.claude.binary_path }, claudeLog)
 
   logger.info("jira connecting", { host: new URL(config.jira.base_url).host, project: config.jira.project_key })
@@ -56,12 +60,15 @@ export async function startBotFromConfig(
     if (ctx.message.text.startsWith("/")) {
       return ctx.reply("Unknown command. Try /help")
     }
+    const stopTyping = keepTyping(ctx)
     try {
       const response = await claude.ask(ctx.message.text)
       await ctx.reply(response)
     } catch (err) {
       logger.error("claude reply error", { message: (err as Error).message })
       await ctx.reply("Failed to get a response from Claude. Please try again.")
+    } finally {
+      stopTyping()
     }
   })
 
@@ -119,12 +126,15 @@ export async function startBot(): Promise<void> {
     if (ctx.message.text.startsWith("/")) {
       return ctx.reply("Unknown command. Try /help")
     }
+    const stopTyping = keepTyping(ctx)
     try {
       const response = await claude.ask(ctx.message.text)
       await ctx.reply(response)
     } catch (err) {
       console.error({ event: "claude_reply_error", message: (err as Error).message })
       await ctx.reply("Failed to get a response from Claude. Please try again.")
+    } finally {
+      stopTyping()
     }
   })
 
