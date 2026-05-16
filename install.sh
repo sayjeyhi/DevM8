@@ -157,15 +157,89 @@ print_success() {
 }
 
 register_macos_service() {
-  : # implemented in section-05-install-services
+  local binary_path="$1"
+  local plist_dir="$HOME/Library/LaunchAgents"
+  local plist_path="$plist_dir/com.jira-assistant.plist"
+  mkdir -p "$plist_dir"
+  mkdir -p "$HOME/Library/Logs"
+  launchctl unload "$plist_path" 2>/dev/null || true
+  cat > "$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jira-assistant</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${binary_path}</string>
+        <string>start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>${HOME}/Library/Logs/jira-assistant.log</string>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/Library/Logs/jira-assistant.log</string>
+</dict>
+</plist>
+EOF
+  launchctl load "$plist_path"
 }
 
 register_linux_service() {
-  : # implemented in section-05-install-services
+  local binary_path="$1"
+  local unit_dir="$HOME/.config/systemd/user"
+  local unit_path="$unit_dir/jira-assistant.service"
+  mkdir -p "$unit_dir"
+  cat > "$unit_path" <<EOF
+[Unit]
+Description=Jira Assistant Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${binary_path} start
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now jira-assistant
+  echo
+  echo "Optional: to start jira-assistant at boot even when you are not logged in, run:"
+  echo "  loginctl enable-linger $(id -un)"
+  echo "Note: this may require sudo on some systems."
 }
 
 start_service() {
-  : # implemented in section-05-install-services
+  if [[ "$OS" == "macos" ]]; then
+    if launchctl list 2>/dev/null | grep -q "com.jira-assistant"; then
+      echo "Service running (launchd)."
+    else
+      echo "Service not detected in launchd — check ~/Library/LaunchAgents/com.jira-assistant.plist"
+    fi
+  else
+    if systemctl --user is-active jira-assistant &>/dev/null; then
+      echo "Service running (systemd)."
+    else
+      echo "Service not detected — check: systemctl --user status jira-assistant"
+    fi
+  fi
 }
 
 do_uninstall() {
@@ -209,9 +283,9 @@ main() {
 
   if [[ "$OS" == "macos" ]]; then
     strip_quarantine "$INSTALL_DIR/jira-assistant"
-    register_macos_service
+    register_macos_service "$INSTALL_DIR/jira-assistant"
   else
-    register_linux_service
+    register_linux_service "$INSTALL_DIR/jira-assistant"
   fi
 
   run_config_if_needed

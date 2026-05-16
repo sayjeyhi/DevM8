@@ -345,3 +345,170 @@ _install_sh() { printf '%s' "${BATS_TEST_DIRNAME}/../install.sh"; }
     [ "$status" -eq 0 ]
     [ "$output" = "SOURCED_OK" ]
 }
+
+# ─── Section-05 install.sh service registration tests ───────────────────────
+
+@test "register_macos_service: plist created at correct path" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_HOME/Library/LaunchAgents/com.jira-assistant.plist" ]
+}
+
+@test "register_macos_service: plist contains KeepAlive in dictionary form" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -A1 '<key>KeepAlive</key>' "$FAKE_HOME/Library/LaunchAgents/com.jira-assistant.plist" | grep -q '<dict>'
+}
+
+@test "register_macos_service: plist contains ThrottleInterval = 30" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q '<integer>30</integer>' "$FAKE_HOME/Library/LaunchAgents/com.jira-assistant.plist"
+}
+
+@test "register_macos_service: plist contains RunAtLoad = true" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -A1 '<key>RunAtLoad</key>' "$FAKE_HOME/Library/LaunchAgents/com.jira-assistant.plist" | grep -q '<true/>'
+}
+
+@test "register_macos_service: launchctl unload called before launchctl load" {
+    local call_log="$FAKE_HOME/launchctl_calls"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "%%s\\n" "$1" >> "%s"\n' "$call_log"
+        printf 'exit 0\n'
+    } > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    [ "$(sed -n '1p' "$call_log")" = "unload" ]
+    [ "$(sed -n '2p' "$call_log")" = "load" ]
+}
+
+@test "register_macos_service: launchctl load called with plist path" {
+    local call_log="$FAKE_HOME/launchctl_calls"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "%%s\\n" "$*" >> "%s"\n' "$call_log"
+        printf 'exit 0\n'
+    } > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_macos_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q "load.*com.jira-assistant.plist" "$call_log"
+}
+
+@test "register_linux_service: service file created at correct path" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_HOME/.config/systemd/user/jira-assistant.service" ]
+}
+
+@test "register_linux_service: unit file contains Restart=on-failure" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q 'Restart=on-failure' "$FAKE_HOME/.config/systemd/user/jira-assistant.service"
+}
+
+@test "register_linux_service: unit file contains StartLimitIntervalSec=300" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q 'StartLimitIntervalSec=300' "$FAKE_HOME/.config/systemd/user/jira-assistant.service"
+}
+
+@test "register_linux_service: unit file contains StartLimitBurst=5" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q 'StartLimitBurst=5' "$FAKE_HOME/.config/systemd/user/jira-assistant.service"
+}
+
+@test "register_linux_service: unit file contains Type=simple" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q 'Type=simple' "$FAKE_HOME/.config/systemd/user/jira-assistant.service"
+}
+
+@test "register_linux_service: systemctl enable --now called" {
+    local call_log="$FAKE_HOME/systemctl_calls"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "%%s\\n" "$*" >> "%s"\n' "$call_log"
+        printf 'exit 0\n'
+    } > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q -- '--user enable --now' "$call_log"
+}
+
+@test "register_linux_service: systemctl daemon-reload called before enable" {
+    local call_log="$FAKE_HOME/systemctl_calls"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "%%s\\n" "$*" >> "%s"\n' "$call_log"
+        printf 'exit 0\n'
+    } > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export HOME=\"$FAKE_HOME\"; export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; register_linux_service \"/usr/local/bin/jira-assistant\""
+    [ "$status" -eq 0 ]
+    grep -q -- '--user daemon-reload' "$call_log"
+    local reload_line enable_line
+    reload_line=$(grep -n -- '--user daemon-reload' "$call_log" | head -1 | cut -d: -f1)
+    enable_line=$(grep -n -- '--user enable' "$call_log" | head -1 | cut -d: -f1)
+    [ "$reload_line" -lt "$enable_line" ]
+}
+
+@test "start_service: macOS reports running when service is in launchd" {
+    {
+        printf '#!/bin/sh\n'
+        printf 'if [ "$1" = "list" ]; then echo "com.jira-assistant"; fi\n'
+        printf 'exit 0\n'
+    } > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; OS=macos start_service"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"running"* ]]
+}
+
+@test "start_service: macOS reports not detected when service absent from launchd" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/launchctl"
+    chmod +x "$MOCK_BIN/launchctl"
+    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; OS=macos start_service"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not detected"* ]]
+}
+
+@test "start_service: linux reports running when systemd service is active" {
+    printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; OS=linux start_service"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"running"* ]]
+}
+
+@test "start_service: linux reports not detected when systemd service inactive" {
+    printf '#!/bin/sh\nexit 1\n' > "$MOCK_BIN/systemctl"
+    chmod +x "$MOCK_BIN/systemctl"
+    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; source \"$(_install_sh)\"; OS=linux start_service"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not detected"* ]]
+}
