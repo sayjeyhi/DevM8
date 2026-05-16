@@ -50,7 +50,7 @@ export async function startCommand(): Promise<void> {
     await stopCommand()
   }
 
-  await writePlist(realpathSync(Bun.argv[0]))
+  await writePlist(realpathSync(process.execPath))
   await loadAgent()
 
   const deadline = Date.now() + 5000
