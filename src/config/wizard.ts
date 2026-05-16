@@ -20,6 +20,15 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
         initialValue: existing?.telegram.bot_token,
         validate: (v) => (v && BOT_TOKEN_REGEX.test(v)) ? undefined : "Invalid Telegram bot token format. Expected format: 123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
       }),
+      allowed_user_ids: () => text({
+        message: "Your Telegram user ID(s), comma-separated (send /start to @userinfobot to get yours)",
+        initialValue: existing?.telegram.allowed_user_ids?.join(", ") ?? "",
+        validate: (v) => {
+          if (!v || v.trim() === "") return "At least one Telegram user ID is required"
+          const ids = v.split(",").map(s => parseInt(s.trim(), 10))
+          if (ids.some(n => isNaN(n) || n <= 0)) return "All values must be positive integers"
+        },
+      }),
       base_url: () => text({
         message: "Jira base URL (e.g. https://mycompany.atlassian.net)",
         initialValue: existing?.jira.base_url,
@@ -48,6 +57,10 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
         initialValue: existing?.claude.binary_path ?? (Bun.which("claude") ?? ""),
         validate: (v) => (v && existsSync(v)) ? undefined : "File not found at this path",
       }),
+      claude_api_key: () => text({
+        message: "Anthropic API key (leave blank to use ANTHROPIC_API_KEY env var)",
+        initialValue: existing?.claude.api_key ?? "",
+      }),
     },
     {
       onCancel: () => { throw new FriendlyError("Setup cancelled.") },
@@ -59,16 +72,21 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
   }
 
   const r = result as {
-    bot_token: string; base_url: string; api_token: string
-    email: string; project_key: string; binary_path: string
+    bot_token: string; allowed_user_ids: string; base_url: string; api_token: string
+    email: string; project_key: string; binary_path: string; claude_api_key: string
   }
 
   outro("Setup complete!")
 
+  const allowedUserIds = r.allowed_user_ids
+    .split(",")
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => !isNaN(n) && n > 0)
+
   return {
-    telegram: { bot_token: r.bot_token },
+    telegram: { bot_token: r.bot_token, allowed_user_ids: allowedUserIds },
     jira: { base_url: r.base_url, api_token: r.api_token, email: r.email, project_key: r.project_key },
-    claude: { binary_path: r.binary_path },
+    claude: { binary_path: r.binary_path, api_key: r.claude_api_key || undefined },
     app: { log_level: existing?.app.log_level ?? "info" },
   }
 }

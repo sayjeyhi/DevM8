@@ -7,6 +7,7 @@ export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export const AppConfigSchema = z.object({
   telegram: z.object({
     bot_token: z.string().regex(BOT_TOKEN_REGEX),
+    allowed_user_ids: z.array(z.number().int().positive()).default([]),
   }),
   jira: z.object({
     base_url: z.string().refine((v) => {
@@ -19,6 +20,7 @@ export const AppConfigSchema = z.object({
   }),
   claude: z.object({
     binary_path: z.string().min(1),
+    api_key: z.string().optional(),
   }),
   app: z.object({
     log_level: z.enum(["info", "debug", "error"]).default("info"),

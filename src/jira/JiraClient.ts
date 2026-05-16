@@ -135,4 +135,8 @@ export class JiraClient {
       body: toADF(body),
     })
   }
+
+  async ping(): Promise<{ displayName: string; emailAddress: string }> {
+    return this.request<{ displayName: string; emailAddress: string }>('GET', 'myself')
+  }
 }

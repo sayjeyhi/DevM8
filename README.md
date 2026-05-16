@@ -1,6 +1,6 @@
 # DevMate
 
-A Telegram bot that lets you manage Jira issues from your phone — create, move, comment, and resolve issues without opening a browser.
+An AFK tool that lets you manage Tickets from your phone — create, move, comment, and resolve issues without opening a browser.
 
 ## Install
 

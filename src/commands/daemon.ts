@@ -48,7 +48,7 @@ export async function daemonCommand(): Promise<void> {
   })
 
   try {
-    pollingPromise = startPolling(shutdownController.signal, logger)
+    pollingPromise = startPolling(shutdownController.signal, logger, config)
     await pollingPromise
   } catch (err) {
     logger.error("polling error", { message: (err as Error).message })

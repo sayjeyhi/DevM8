@@ -32,8 +32,6 @@ export function generatePlist(binaryPath: string): string {
         <string>${xmlEscape(binaryPath)}</string>
         <string>daemon</string>
     </array>
-    <key>StandardOutPath</key>
-    <string>${xmlEscape(PATHS.logFile)}</string>
     <key>StandardErrorPath</key>
     <string>${xmlEscape(PATHS.logFile)}</string>
     <key>KeepAlive</key>

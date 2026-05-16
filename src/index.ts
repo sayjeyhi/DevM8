@@ -1,14 +1,23 @@
 import { defineCommand, runMain } from "citty"
 import { FriendlyError } from "./shared/errors"
 import type { Logger } from "./logger/index"
+import type { AppConfig } from "./config/schema"
+import { startBotFromConfig } from "./bot/bot"
 
 declare const __VERSION__: string
 
-export async function startPolling(signal: AbortSignal, logger?: Logger): Promise<void> {
-  // placeholder — implemented in 02-integration-clients section
-  logger?.info("polling started")
-  await new Promise<void>(resolve => signal.addEventListener("abort", resolve, { once: true }))
-  logger?.info("polling stopped")
+export async function startPolling(signal: AbortSignal, logger?: Logger, config?: AppConfig): Promise<void> {
+  if (!config) {
+    logger?.warn("no config provided — bot not starting")
+    await new Promise<void>(resolve => signal.addEventListener("abort", resolve, { once: true }))
+    return
+  }
+  await startBotFromConfig(config, signal, logger ?? {
+    info: (msg, meta) => console.log("[INFO]", msg, meta ?? ""),
+    warn: (msg, meta) => console.warn("[WARN]", msg, meta ?? ""),
+    error: (msg, meta) => console.error("[ERROR]", msg, meta ?? ""),
+    debug: (msg, meta) => console.debug("[DEBUG]", msg, meta ?? ""),
+  })
 }
 
 const appVersion = typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0-dev"
