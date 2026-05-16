@@ -243,7 +243,19 @@ start_service() {
 }
 
 do_uninstall() {
-  : # implemented in section-06-install-uninstall
+  detect_platform
+  stop_existing_service
+  if [[ "$OS" == "macos" ]]; then
+    rm -f "${HOME}/Library/LaunchAgents/com.jira-assistant.plist"
+  else
+    systemctl --user disable jira-assistant 2>/dev/null || true
+    rm -f "${HOME}/.config/systemd/user/jira-assistant.service"
+  fi
+  rm -f /usr/local/bin/jira-assistant
+  rm -f "${HOME}/.local/bin/jira-assistant"
+  echo "Config files at ~/.config/jira-assistant/ were left in place. Remove manually if desired."
+  echo "PATH entries added to shell RC files must be cleaned up manually."
+  exit 0
 }
 
 main() {
