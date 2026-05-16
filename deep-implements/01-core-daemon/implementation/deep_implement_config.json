@@ -1,0 +1,48 @@
+{
+  "plugin_root": "/Users/sayjeyhi/.claude/plugins/cache/piercelamb-plugins/deep-implement/0.2.1",
+  "sections_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/01-core-daemon/sections",
+  "target_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "state_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/01-core-daemon/implementation",
+  "git_root": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "commit_style": "unknown",
+  "test_command": "uv run pytest",
+  "sections": [
+    "section-01-foundation",
+    "section-02-config",
+    "section-03-logger",
+    "section-04-launchd",
+    "section-05-cli-commands",
+    "section-06-build-integration"
+  ],
+  "sections_state": {
+    "section-01-foundation": {
+      "status": "complete",
+      "commit_hash": "f69e5fd"
+    },
+    "section-02-config": {
+      "status": "complete",
+      "commit_hash": "0dd9bc2"
+    },
+    "section-03-logger": {
+      "status": "complete",
+      "commit_hash": "3c1f889"
+    },
+    "section-04-launchd": {
+      "status": "complete",
+      "commit_hash": "14531485f68d122553b7242e1af0c757ee1ff8b0"
+    },
+    "section-05-cli-commands": {
+      "status": "complete",
+      "commit_hash": "1f5921f1f43eae28f379b586f284ebe3214e66c5"
+    }
+  },
+  "pre_commit": {
+    "present": false,
+    "type": "none",
+    "config_file": null,
+    "native_hook": null,
+    "may_modify_files": false,
+    "detected_formatters": []
+  },
+  "created_at": "2026-05-14T15:47:25.313688+00:00"
+}

@@ -1,0 +1,47 @@
+{
+  "plugin_root": "/Users/sayjeyhi/.claude/plugins/cache/piercelamb-plugins/deep-implement/0.2.1",
+  "sections_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/02-integration-clients/sections",
+  "target_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "state_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/02-integration-clients/implementation",
+  "git_root": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "commit_style": "simple",
+  "test_command": "uv run pytest",
+  "sections": [
+    "section-01-foundation",
+    "section-02-adf-helpers",
+    "section-03-telegram",
+    "section-04-jira",
+    "section-05-claude"
+  ],
+  "sections_state": {
+    "section-01-foundation": {
+      "status": "complete",
+      "commit_hash": "b95d90f"
+    },
+    "section-02-adf-helpers": {
+      "status": "complete",
+      "commit_hash": "82e2069"
+    },
+    "section-03-telegram": {
+      "status": "complete",
+      "commit_hash": "5b000a2"
+    },
+    "section-04-jira": {
+      "status": "complete",
+      "commit_hash": "5568bf2"
+    },
+    "section-05-claude": {
+      "status": "complete",
+      "commit_hash": "f207c36"
+    }
+  },
+  "pre_commit": {
+    "present": false,
+    "type": "none",
+    "config_file": null,
+    "native_hook": null,
+    "may_modify_files": false,
+    "detected_formatters": []
+  },
+  "created_at": "2026-05-14T19:19:19.904145+00:00"
+}

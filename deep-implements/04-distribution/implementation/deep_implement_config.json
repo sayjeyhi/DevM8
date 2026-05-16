@@ -1,0 +1,62 @@
+{
+  "plugin_root": "/Users/sayjeyhi/.claude/plugins/cache/piercelamb-plugins/deep-implement/0.2.1",
+  "sections_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/04-distribution/sections",
+  "target_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "state_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/04-distribution/implementation",
+  "git_root": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "commit_style": "simple",
+  "test_command": "uv run pytest",
+  "sections": [
+    "section-01-ci-workflow",
+    "section-02-binary-targets",
+    "section-03-checksums-generation",
+    "section-04-install-core",
+    "section-05-install-services",
+    "section-06-install-uninstall",
+    "section-07-readme",
+    "section-08-tests"
+  ],
+  "sections_state": {
+    "section-01-ci-workflow": {
+      "status": "complete",
+      "commit_hash": "61bbf7f"
+    },
+    "section-02-binary-targets": {
+      "status": "complete",
+      "commit_hash": "8272ff0"
+    },
+    "section-03-checksums-generation": {
+      "status": "complete",
+      "commit_hash": "88269169ca74c46ea838d254db0d1994caf20ada"
+    },
+    "section-04-install-core": {
+      "status": "complete",
+      "commit_hash": "1b2afbbe31ec54e65cf136ed7f3c7c25cb9bb896"
+    },
+    "section-05-install-services": {
+      "status": "complete",
+      "commit_hash": "313c850"
+    },
+    "section-06-install-uninstall": {
+      "status": "complete",
+      "commit_hash": "1cc3ea5"
+    },
+    "section-07-readme": {
+      "status": "complete",
+      "commit_hash": "21f78b9"
+    },
+    "section-08-tests": {
+      "status": "complete",
+      "commit_hash": "21b7fb8"
+    }
+  },
+  "pre_commit": {
+    "present": false,
+    "type": "none",
+    "config_file": null,
+    "native_hook": null,
+    "may_modify_files": false,
+    "detected_formatters": []
+  },
+  "created_at": "2026-05-15T15:02:38.437917+00:00"
+}

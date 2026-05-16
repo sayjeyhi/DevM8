@@ -1,0 +1,57 @@
+{
+  "plugin_root": "/Users/sayjeyhi/.claude/plugins/cache/piercelamb-plugins/deep-implement/0.2.1",
+  "sections_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/03-command-handlers/sections",
+  "target_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "state_dir": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant/03-command-handlers/implementation",
+  "git_root": "/Users/sayjeyhi/Desktop/projects/github/sayjeyhi/jira-assistant",
+  "commit_style": "simple",
+  "test_command": "uv run pytest",
+  "sections": [
+    "section-01-foundation",
+    "section-02-auth-middleware",
+    "section-03-utils",
+    "section-04-create-handler",
+    "section-05-move-comment-help-handlers",
+    "section-06-solve-handler",
+    "section-07-registration-and-bot"
+  ],
+  "sections_state": {
+    "section-01-foundation": {
+      "status": "complete",
+      "commit_hash": "1d01aa6"
+    },
+    "section-02-auth-middleware": {
+      "status": "complete",
+      "commit_hash": "86b010d"
+    },
+    "section-03-utils": {
+      "status": "complete",
+      "commit_hash": "6ea5b86"
+    },
+    "section-04-create-handler": {
+      "status": "complete",
+      "commit_hash": "4952c24"
+    },
+    "section-05-move-comment-help-handlers": {
+      "status": "complete",
+      "commit_hash": "5515befeb192b24c15615a90e1c5f3acf6b4e231"
+    },
+    "section-06-solve-handler": {
+      "status": "complete",
+      "commit_hash": "72644b266caa088ab6c676e6a480d525ad2f9eb8"
+    },
+    "section-07-registration-and-bot": {
+      "status": "complete",
+      "commit_hash": "98da529e04da909fa9b5d370fce0f88a57886742"
+    }
+  },
+  "pre_commit": {
+    "present": false,
+    "type": "none",
+    "config_file": null,
+    "native_hook": null,
+    "may_modify_files": false,
+    "detected_formatters": []
+  },
+  "created_at": "2026-05-15T11:30:51.724001+00:00"
+}

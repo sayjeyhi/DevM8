@@ -1,0 +1,28 @@
+import { z } from "zod"
+
+export const BOT_TOKEN_REGEX = /^\d+:[A-Za-z0-9_-]{20,}$/
+export const PROJECT_KEY_REGEX = /^[A-Z][A-Z0-9_]+$/
+export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+export const AppConfigSchema = z.object({
+  telegram: z.object({
+    bot_token: z.string().regex(BOT_TOKEN_REGEX),
+  }),
+  jira: z.object({
+    base_url: z.string().refine((v) => {
+      if (!v.startsWith("https://")) return false
+      try { new URL(v); return true } catch { return false }
+    }, { message: "Must be a valid HTTPS URL" }),
+    api_token: z.string().min(1),
+    email: z.string().email(),
+    project_key: z.string().regex(PROJECT_KEY_REGEX),
+  }),
+  claude: z.object({
+    binary_path: z.string().min(1),
+  }),
+  app: z.object({
+    log_level: z.enum(["info", "debug", "error"]).default("info"),
+  }).optional().default({ log_level: "info" }),
+})
+
+export type AppConfig = z.infer<typeof AppConfigSchema>
