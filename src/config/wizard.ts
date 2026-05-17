@@ -1,17 +1,55 @@
-import { intro, outro, group, text, isCancel } from "@clack/prompts"
+import { intro, outro, text, multiselect, note, isCancel } from "@clack/prompts"
 import type { AppConfig } from "./schema"
 import { FriendlyError } from "../shared/errors"
+import { JiraClient } from "../jira/JiraClient"
 import {
   validateBotToken,
   validateAllowedUserIds,
   validateJiraBaseUrl,
   validateApiToken,
   validateEmail,
-  validateProjectKey,
+  validateProjectKeys,
   validateBinaryPath,
 } from "./validators"
 
-export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
+function cancel<T>(value: T): T {
+  if (isCancel(value)) throw new FriendlyError("Setup cancelled.")
+  return value
+}
+
+async function checkGhCli(): Promise<void> {
+  if (!Bun.which("gh")) {
+    note("Install GitHub CLI for full GitHub integration: https://cli.github.com", "gh not found")
+    return
+  }
+  try {
+    const proc = Bun.spawn(["gh", "auth", "status"], { stdout: "pipe", stderr: "pipe" })
+    if (await proc.exited !== 0) {
+      note("Run `gh auth login` to authenticate GitHub CLI.", "gh not authenticated")
+    }
+  } catch { /* ignore — gh check is advisory only */ }
+}
+
+async function tryFetchProjects(
+  baseUrl: string,
+  apiToken: string,
+  email: string,
+): Promise<Array<{ key: string; name: string }> | null> {
+  try {
+    const jira = new JiraClient(
+      { host: new URL(baseUrl).host, email, apiToken, projectKeys: [] },
+      { info: () => {}, error: () => {} },
+    )
+    return await jira.getProjects()
+  } catch {
+    return null
+  }
+}
+
+export async function runWizard(
+  existing?: AppConfig,
+  fetchProjectsFn: (baseUrl: string, apiToken: string, email: string) => Promise<Array<{ key: string; name: string }> | null> = tryFetchProjects,
+): Promise<AppConfig> {
   if (!process.stdin.isTTY) {
     throw new FriendlyError(
       "Cannot run wizard in non-interactive mode.",
@@ -21,73 +59,88 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
 
   intro("DevM8 setup")
 
-  const result = await group(
-    {
-      bot_token: () => text({
-        message: "Telegram bot token",
-        initialValue: existing?.telegram.bot_token,
-        validate: validateBotToken,
-      }),
-      allowed_user_ids: () => text({
-        message: "Your Telegram user ID(s), comma-separated (send /start to @userinfobot to get yours)",
-        initialValue: existing?.telegram.allowed_user_ids?.join(", ") ?? "",
-        validate: validateAllowedUserIds,
-      }),
-      base_url: () => text({
-        message: "Jira base URL (e.g. https://mycompany.atlassian.net)",
-        initialValue: existing?.jira.base_url,
-        validate: validateJiraBaseUrl,
-      }),
-      api_token: () => text({
-        message: "Jira API token",
-        initialValue: existing?.jira.api_token,
-        validate: validateApiToken,
-      }),
-      email: () => text({
-        message: "Jira account email",
-        initialValue: existing?.jira.email,
-        validate: validateEmail,
-      }),
-      project_key: () => text({
-        message: "Jira project key (e.g. MYPROJECT)",
-        initialValue: existing?.jira.project_key,
-        validate: validateProjectKey,
-      }),
-      binary_path: () => text({
-        message: "Path to claude binary",
-        initialValue: existing?.claude.binary_path ?? (Bun.which("claude") ?? ""),
-        validate: validateBinaryPath,
-      }),
-      api_key: () => text({
-        message: "Anthropic API key (leave blank if claude is already logged in via `claude login`)",
-        initialValue: existing?.claude.api_key ?? "",
-      }),
-    },
-    {
-      onCancel: () => { throw new FriendlyError("Setup cancelled.") },
-    }
-  )
+  await checkGhCli()
 
-  if (isCancel(result)) {
-    throw new FriendlyError("Setup cancelled.")
+  const bot_token = cancel(await text({
+    message: "Telegram bot token",
+    initialValue: existing?.telegram.bot_token,
+    validate: validateBotToken,
+  }))
+
+  const allowed_user_ids = cancel(await text({
+    message: "Your Telegram user ID(s), comma-separated (send /start to @userinfobot to get yours)",
+    initialValue: existing?.telegram.allowed_user_ids?.join(", ") ?? "",
+    validate: validateAllowedUserIds,
+  }))
+
+  const base_url = cancel(await text({
+    message: "Jira base URL (e.g. https://mycompany.atlassian.net)",
+    initialValue: existing?.jira.base_url,
+    validate: validateJiraBaseUrl,
+  }))
+
+  const api_token = cancel(await text({
+    message: "Jira API token",
+    initialValue: existing?.jira.api_token,
+    validate: validateApiToken,
+  }))
+
+  const email = cancel(await text({
+    message: "Jira account email",
+    initialValue: existing?.jira.email,
+    validate: validateEmail,
+  }))
+
+  let project_keys: string[]
+  const fetchResult = await fetchProjectsFn(base_url as string, api_token as string, email as string)
+  if (fetchResult && fetchResult.length > 0) {
+    const initialKeys = existing?.jira.project_keys ?? []
+    const selected = cancel(await multiselect({
+      message: "Select Jira projects to track",
+      options: fetchResult.map(p => ({ value: p.key, label: `${p.key} — ${p.name}` })),
+      initialValues: initialKeys.filter(k => fetchResult.some(p => p.key === k)),
+      required: true,
+    }))
+    project_keys = selected as string[]
+  } else {
+    const raw = cancel(await text({
+      message: "Jira project keys, comma-separated (e.g. MP,BZ)",
+      initialValue: existing?.jira.project_keys?.join(", ") ?? "",
+      validate: validateProjectKeys,
+    }))
+    project_keys = (raw as string).split(",").map(s => s.trim().toUpperCase()).filter(Boolean)
   }
 
-  const r = result as {
-    bot_token: string; allowed_user_ids: string; base_url: string; api_token: string
-    email: string; project_key: string; binary_path: string; api_key: string
-  }
+  const binary_path = cancel(await text({
+    message: "Path to claude binary",
+    initialValue: existing?.claude.binary_path ?? (Bun.which("claude") ?? ""),
+    validate: validateBinaryPath,
+  }))
+
+  const api_key = cancel(await text({
+    message: "Anthropic API key (leave blank if claude is already logged in via `claude login`)",
+    initialValue: existing?.claude.api_key ?? "",
+  }))
 
   outro("Setup complete!")
 
-  const allowedUserIds = r.allowed_user_ids
+  const allowedUserIds = (allowed_user_ids as string)
     .split(",")
     .map(s => parseInt(s.trim(), 10))
     .filter(n => !isNaN(n) && n > 0)
 
   return {
-    telegram: { bot_token: r.bot_token, allowed_user_ids: allowedUserIds },
-    jira: { base_url: r.base_url, api_token: r.api_token, email: r.email, project_key: r.project_key },
-    claude: { binary_path: r.binary_path, ...(r.api_key.trim() ? { api_key: r.api_key.trim() } : {}) },
+    telegram: { bot_token: bot_token as string, allowed_user_ids: allowedUserIds },
+    jira: {
+      base_url: base_url as string,
+      api_token: api_token as string,
+      email: email as string,
+      project_keys,
+    },
+    claude: {
+      binary_path: binary_path as string,
+      ...((api_key as string).trim() ? { api_key: (api_key as string).trim() } : {}),
+    },
     app: { log_level: existing?.app.log_level ?? "info" },
   }
 }

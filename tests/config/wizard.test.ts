@@ -1,30 +1,26 @@
-import { mock, describe, it, expect, spyOn, afterEach } from "bun:test"
+import { mock, describe, it, expect, spyOn, beforeEach, afterEach } from "bun:test"
 import type { AppConfig } from "../../src/config/schema"
 
 // Module-level state controlling mock behavior — updated per-test
 type TextOpts = { message: string; initialValue?: string; validate?: (v: string) => string | undefined }
-type GroupOpts = { onCancel: () => never }
-type Prompts = Record<string, () => Promise<string>>
+type MultiselectOpts = { message: string; options: Array<{ value: string; label: string }>; initialValues?: string[]; required?: boolean }
 
-let _textImpl: (opts: TextOpts) => Promise<string> =
+let _textImpl: (opts: TextOpts) => Promise<unknown> =
   ({ initialValue }) => Promise.resolve(initialValue ?? "")
 
-let _groupImpl: (prompts: Prompts, opts: GroupOpts) => Promise<Record<string, string>> =
-  async (prompts, _opts) => {
-    const results: Record<string, string> = {}
-    for (const [key, fn] of Object.entries(prompts)) {
-      results[key] = await fn()
-    }
-    return results
-  }
+let _multiselectImpl: (opts: MultiselectOpts) => Promise<unknown> =
+  (opts) => Promise.resolve(opts.initialValues ?? opts.options.slice(0, 1).map(o => o.value))
+
+let _isCancelImpl: (v: unknown) => boolean = () => false
 
 // Hoisted before imports by Bun — wizard.ts gets the mock @clack/prompts
 mock.module("@clack/prompts", () => ({
   intro: () => {},
   outro: () => {},
-  isCancel: () => false,
-  group: (p: Prompts, o: GroupOpts) => _groupImpl(p, o),
+  note: () => {},
+  isCancel: (v: unknown) => _isCancelImpl(v),
   text: (o: TextOpts) => _textImpl(o),
+  multiselect: (o: MultiselectOpts) => _multiselectImpl(o),
 }))
 
 import { runWizard } from "../../src/config/wizard"
@@ -34,16 +30,24 @@ import {
   validateJiraBaseUrl,
   validateApiToken,
   validateEmail,
-  validateProjectKey,
+  validateProjectKeys,
 } from "../../src/config/validators"
+
+let whichSpy: ReturnType<typeof spyOn<typeof Bun, "which">>
+
+// Default fetchProjects mock: returns [] (text fallback path)
+const noProjects = async () => []
+
+beforeEach(() => {
+  // Default: gh not found (skip spawn check), claude not found (use initialValue)
+  whichSpy = spyOn(Bun, "which").mockReturnValue(null)
+  _multiselectImpl = (opts) => Promise.resolve(opts.initialValues ?? opts.options.slice(0, 1).map(o => o.value))
+  _isCancelImpl = () => false
+})
 
 afterEach(() => {
   _textImpl = ({ initialValue }) => Promise.resolve(initialValue ?? "")
-  _groupImpl = async (prompts, _opts) => {
-    const results: Record<string, string> = {}
-    for (const [key, fn] of Object.entries(prompts)) results[key] = await fn()
-    return results
-  }
+  whichSpy.mockRestore()
 })
 
 // Helper: force isTTY for tests that need the wizard to proceed past the TTY check
@@ -60,7 +64,7 @@ const VALID_VALUES: Record<string, string> = {
   "Jira base URL": "https://myco.atlassian.net",
   "Jira API token": "mytoken",
   "Jira account email": "user@example.com",
-  "Jira project key": "MYPROJECT",
+  "Jira project keys": "MYPROJECT",
   "Path to claude binary": "/usr/bin/true",
   "Anthropic API key": "",
 }
@@ -106,26 +110,26 @@ describe("runWizard", () => {
     expect(validateEmail("missing@tld")).toBeTypeOf("string")
   })
 
-  it("prompts for jira.project_key and validates uppercase", () => {
-    expect(validateProjectKey("MYPROJECT")).toBeUndefined()
-    expect(validateProjectKey("myproject")).toBeTypeOf("string")
-    expect(validateProjectKey("My Project")).toBeTypeOf("string")
-    expect(validateProjectKey("123PROJ")).toBeTypeOf("string")
+  it("prompts for jira.project_keys and validates comma-separated keys", () => {
+    expect(validateProjectKeys("MYPROJECT")).toBeUndefined()
+    expect(validateProjectKeys("MP,BZ")).toBeUndefined()
+    expect(validateProjectKeys("myproject")).toBeTypeOf("string")
+    expect(validateProjectKeys("")).toBeTypeOf("string")
+    expect(validateProjectKeys("123PROJ")).toBeTypeOf("string")
   })
 
   it("auto-fills claude.binary_path from PATH when not in existing config", async () => {
-    const whichSpy = spyOn(Bun, "which").mockReturnValue("/auto/claude")
+    whichSpy.mockImplementation((bin: string) => bin === "claude" ? "/auto/claude" : null)
     const captured: Record<string, string | undefined> = {}
     _textImpl = ({ message, initialValue }) => {
       captured[message] = initialValue
       return Promise.resolve(initialValue ?? "")
     }
 
-    await withTTY(true, () => runWizard())
+    await withTTY(true, () => runWizard(undefined, noProjects))
 
     expect(whichSpy).toHaveBeenCalledWith("claude")
     expect(captured["Path to claude binary"]).toBe("/auto/claude")
-    whichSpy.mockRestore()
   })
 
   it("preserves existing config values as initial values", async () => {
@@ -137,37 +141,36 @@ describe("runWizard", () => {
 
     const existing: AppConfig = {
       telegram: { bot_token: "111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", allowed_user_ids: [42, 99] },
-      jira: { base_url: "https://co.atlassian.net", api_token: "tok", email: "a@b.com", project_key: "PROJ" },
+      jira: { base_url: "https://co.atlassian.net", api_token: "tok", email: "a@b.com", project_keys: ["PROJ"] },
       claude: { binary_path: "/my/claude", api_key: "sk-ant-123" },
       app: { log_level: "info" },
     }
 
-    await withTTY(true, () => runWizard(existing))
+    await withTTY(true, () => runWizard(existing, noProjects))
 
     expect(captured["Telegram bot token"]).toBe("111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef")
     expect(captured["Jira base URL (e.g. https://mycompany.atlassian.net)"]).toBe("https://co.atlassian.net")
     expect(captured["Jira API token"]).toBe("tok")
     expect(captured["Jira account email"]).toBe("a@b.com")
-    expect(captured["Jira project key (e.g. MYPROJECT)"]).toBe("PROJ")
+    expect(captured["Jira project keys, comma-separated (e.g. MP,BZ)"]).toBe("PROJ")
     expect(captured["Path to claude binary"]).toBe("/my/claude")
     expect(captured["Your Telegram user ID(s), comma-separated (send /start to @userinfobot to get yours)"]).toBe("42, 99")
   })
 
   it("throws FriendlyError on Ctrl+C cancel", async () => {
-    _groupImpl = (_prompts, opts) => {
-      opts.onCancel()
-      return Promise.resolve({})
-    }
+    const CANCEL = Symbol("cancel")
+    _textImpl = () => Promise.resolve(CANCEL)
+    _isCancelImpl = (v: unknown) => v === CANCEL
 
     let err: unknown
-    try { await withTTY(true, () => runWizard()) } catch (e) { err = e }
+    try { await withTTY(true, () => runWizard(undefined, noProjects)) } catch (e) { err = e }
     expect(err).toBeInstanceOf(FriendlyError)
   })
 
   it("returns AppConfig without writing to disk", async () => {
     _textImpl = validTextImpl
 
-    const result = await withTTY(true, () => runWizard())
+    const result = await withTTY(true, () => runWizard(undefined, noProjects))
 
     expect(result).toMatchObject({
       telegram: expect.objectContaining({ bot_token: expect.any(String), allowed_user_ids: expect.any(Array) }),
@@ -175,10 +178,53 @@ describe("runWizard", () => {
         base_url: expect.any(String),
         api_token: expect.any(String),
         email: expect.any(String),
-        project_key: expect.any(String),
+        project_keys: expect.any(Array),
       }),
       claude: expect.objectContaining({ binary_path: expect.any(String) }),
       app: expect.objectContaining({ log_level: expect.any(String) }),
     })
+  })
+
+  it("uses multiselect when fetchProjectsFn returns non-empty list", async () => {
+    const fakeProjects = [{ key: "MP", name: "Main Project" }, { key: "BZ", name: "Blaze" }]
+    const selectedKeys: string[][] = []
+    _multiselectImpl = (opts) => {
+      selectedKeys.push(opts.options.map(o => o.value))
+      return Promise.resolve([opts.options[0].value])
+    }
+    _textImpl = validTextImpl
+
+    const result = await withTTY(true, () =>
+      runWizard(undefined, async () => fakeProjects)
+    )
+
+    expect(selectedKeys.length).toBeGreaterThan(0)
+    expect(result.jira.project_keys).toEqual(["MP"])
+  })
+
+  it("falls back to text prompt when fetchProjectsFn returns null", async () => {
+    _textImpl = validTextImpl
+
+    const result = await withTTY(true, () =>
+      runWizard(undefined, async () => null)
+    )
+
+    expect(result.jira.project_keys).toEqual(["MYPROJECT"])
+  })
+
+  it("falls back to text prompt when fetchProjectsFn returns empty list", async () => {
+    _textImpl = validTextImpl
+
+    const result = await withTTY(true, () =>
+      runWizard(undefined, noProjects)
+    )
+
+    expect(result.jira.project_keys).toEqual(["MYPROJECT"])
+  })
+
+  it("proceeds without error when gh is not installed", async () => {
+    whichSpy.mockReturnValue(null)
+    _textImpl = validTextImpl
+    await expect(withTTY(true, () => runWizard(undefined, noProjects))).resolves.toBeDefined()
   })
 })

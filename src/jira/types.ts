@@ -2,7 +2,7 @@ export interface JiraConfig {
   host: string
   email: string
   apiToken: string
-  projectKey: string
+  projectKeys: string[]
   issueType?: string
   requestTimeoutMs?: number
 }

@@ -16,7 +16,7 @@ export const AppConfigSchema = z.object({
     }, { message: "Must be a valid HTTPS URL" }),
     api_token: z.string().min(1),
     email: z.string().email(),
-    project_key: z.string().regex(PROJECT_KEY_REGEX),
+    project_keys: z.array(z.string().regex(PROJECT_KEY_REGEX)).min(1),
   }),
   claude: z.object({
     binary_path: z.string().min(1),

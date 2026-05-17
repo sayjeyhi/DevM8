@@ -50,15 +50,18 @@ function makeClients(opts: {
   issueResult?: unknown
   statusesResult?: unknown
   projectsResult?: unknown
+  projectKeys?: string[]
 } = {}) {
   const {
     listResult = { issues: [], nextPageToken: undefined },
     issueResult = makeIssue(1),
     statusesResult = MOCK_STATUSES,
     projectsResult = MOCK_PROJECTS,
+    projectKeys = ["MP", "BZ"],
   } = opts
   return {
     jira: {
+      projectKeys,
       getProjects:
         projectsResult instanceof Error
           ? mock().mockRejectedValue(projectsResult)
@@ -215,7 +218,7 @@ describe("buildNavKeyboard", () => {
 })
 
 describe("handleMyTickets (project picker)", () => {
-  it("fetches projects and shows picker buttons", async () => {
+  it("fetches projects and shows picker buttons filtered to configured keys", async () => {
     const ctx = makeCtx()
     const clients = makeClients()
 
@@ -240,24 +243,42 @@ describe("handleMyTickets (project picker)", () => {
     expect(texts.some(t => t.includes("BZ"))).toBe(true)
   })
 
-  it("JiraAuthError → replies with auth/token error message", async () => {
+  it("getProjects failure → falls back to key-only picker buttons", async () => {
     const ctx = makeCtx()
     const clients = makeClients({ projectsResult: new JiraAuthError() })
 
     await handleMyTickets(ctx as never, clients as never)
 
-    const reply = (ctx.reply.mock.calls[0][0] as string).toLowerCase()
-    expect(reply).toMatch(/auth|token/)
+    // Fallback: still shows picker with configured keys
+    const opts = ctx.reply.mock.calls[0][1] as { reply_markup?: { inline_keyboard: { callback_data: string }[][] } }
+    const callbacks = opts?.reply_markup?.inline_keyboard?.flat().map(b => b.callback_data) ?? []
+    expect(callbacks).toContain("myt:proj:MP")
+    expect(callbacks).toContain("myt:proj:BZ")
   })
 
-  it("generic error → replies with something went wrong message", async () => {
+  it("generic getProjects failure → still shows picker (graceful degradation)", async () => {
     const ctx = makeCtx()
     const clients = makeClients({ projectsResult: new Error("Network failure") })
 
     await handleMyTickets(ctx as never, clients as never)
 
-    const reply = (ctx.reply.mock.calls[0][0] as string).toLowerCase()
-    expect(reply).toContain("something went wrong")
+    expect(ctx.reply).toHaveBeenCalled()
+    const firstArg = ctx.reply.mock.calls[0][0] as string
+    expect(firstArg).toBe("Select a project:")
+  })
+
+  it("skips project picker and shows status picker when only 1 project configured", async () => {
+    const ctx = makeCtx()
+    const clients = makeClients({ projectKeys: ["MP"] })
+
+    await handleMyTickets(ctx as never, clients as never)
+
+    // getStatuses is called (from handleMyTicketsProject), not getProjects
+    expect(clients.jira.getStatuses).toHaveBeenCalled()
+    expect(clients.jira.getProjects).not.toHaveBeenCalled()
+    const opts = ctx.reply.mock.calls[0][1] as { reply_markup?: { inline_keyboard: { callback_data: string }[][] } }
+    const callbacks = opts?.reply_markup?.inline_keyboard?.flat().map(b => b.callback_data) ?? []
+    expect(callbacks).toContain("myt:s:")
   })
 })
 

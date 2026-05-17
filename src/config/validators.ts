@@ -29,6 +29,16 @@ export function validateProjectKey(v: string): string | undefined {
   return v && PROJECT_KEY_REGEX.test(v) ? undefined : "Must be uppercase letters only, e.g. MYPROJECT"
 }
 
+export function validateProjectKeys(v: string): string | undefined {
+  if (!v || v.trim() === "") return "At least one project key is required"
+  const keys = v.split(",").map(s => s.trim())
+  for (const key of keys) {
+    if (!PROJECT_KEY_REGEX.test(key)) {
+      return `"${key}" is not a valid project key — use uppercase letters, e.g. MYPROJECT`
+    }
+  }
+}
+
 export function validateBinaryPath(v: string): string | undefined {
   return v && existsSync(v) ? undefined : "File not found at this path"
 }

@@ -89,9 +89,25 @@ export function buildDetailsActionKeyboard(key: string): InlineKeyboardMarkup {
 const CATEGORY_ORDER: Record<string, number> = { "To Do": 0, "In Progress": 1, "Done": 2 }
 
 export async function handleMyTickets(ctx: Context, { jira }: Clients): Promise<void> {
+  const configuredKeys = jira.projectKeys
+
+  if (configuredKeys.length === 1) {
+    await handleMyTicketsProject(ctx, { jira }, configuredKeys[0])
+    return
+  }
+
   const stopTyping = keepTyping(ctx)
   try {
-    const projects = await jira.getProjects().finally(stopTyping)
+    let projects: Array<{ key: string; name: string }>
+    try {
+      const all = await jira.getProjects()
+      const keySet = new Set(configuredKeys)
+      const filtered = all.filter(p => keySet.has(p.key))
+      projects = filtered.length > 0 ? filtered : configuredKeys.map(k => ({ key: k, name: k }))
+    } catch {
+      projects = configuredKeys.map(k => ({ key: k, name: k }))
+    }
+    stopTyping()
 
     const buttons: CallbackButton[] = projects.map(p => ({
       text: `📁 ${p.key} — ${p.name}`,
@@ -106,10 +122,6 @@ export async function handleMyTickets(ctx: Context, { jira }: Clients): Promise<
     })
   } catch (err) {
     stopTyping()
-    if (err instanceof JiraAuthError) {
-      await ctx.reply("Authentication failed. Please check your Jira API token.")
-      return
-    }
     const message = err instanceof Error ? err.message : String(err)
     console.log({ event: "error", command: "my_tickets", errorMessage: message })
     await ctx.reply("Something went wrong. Please try again.")

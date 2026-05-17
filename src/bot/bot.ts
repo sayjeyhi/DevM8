@@ -28,7 +28,7 @@ export async function startBotFromConfig(
       host: new URL(config.jira.base_url).host,
       email: config.jira.email,
       apiToken: config.jira.api_token,
-      projectKey: config.jira.project_key,
+      projectKeys: config.jira.project_keys,
     },
     jiraLog,
   )
@@ -38,7 +38,7 @@ export async function startBotFromConfig(
   }
   const claude = new ClaudeClient({ binaryPath: config.claude.binary_path }, claudeLog)
 
-  logger.info("jira connecting", { host: new URL(config.jira.base_url).host, project: config.jira.project_key })
+  logger.info("jira connecting", { host: new URL(config.jira.base_url).host, projects: config.jira.project_keys })
   try {
     const me = await jira.ping()
     logger.info("jira connected", { user: me.displayName, email: me.emailAddress })
@@ -106,7 +106,7 @@ export async function startBot(): Promise<void> {
       host: new URL(config.jiraBaseUrl).host,
       email: config.jiraUserEmail,
       apiToken: config.jiraApiToken,
-      projectKey: config.jiraProjectKey,
+      projectKeys: [config.jiraProjectKey],
     },
     jiraLog,
   )

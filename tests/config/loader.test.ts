@@ -14,7 +14,7 @@ bot_token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
 base_url = "https://mycompany.atlassian.net"
 api_token = "my-api-token"
 email = "user@example.com"
-project_key = "MYPROJECT"
+project_keys = ["MYPROJECT"]
 
 [claude]
 binary_path = "/usr/local/bin/claude"
@@ -29,7 +29,7 @@ const VALID_CONFIG: AppConfig = {
     base_url: "https://mycompany.atlassian.net",
     api_token: "my-api-token",
     email: "user@example.com",
-    project_key: "MYPROJECT",
+    project_keys: ["MYPROJECT"],
   },
   claude: { binary_path: "/usr/local/bin/claude" },
   app: { log_level: "info" },
@@ -70,7 +70,7 @@ describe("loadConfig", () => {
 base_url = "https://mycompany.atlassian.net"
 api_token = "token"
 email = "user@example.com"
-project_key = "PROJ"
+project_keys = ["PROJ"]
 
 [claude]
 binary_path = "/usr/bin/claude"

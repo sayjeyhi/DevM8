@@ -19,6 +19,8 @@ export class JiraClient {
   private readonly authHeader: string
   private readonly baseUrl: string
 
+  get projectKeys(): string[] { return this.config.projectKeys }
+
   constructor(private readonly config: JiraConfig, private readonly logger: Logger) {
     this.authHeader = 'Basic ' + btoa(`${config.email}:${config.apiToken}`)
     this.baseUrl = `https://${config.host}/rest/api/3`
@@ -79,7 +81,7 @@ export class JiraClient {
   async createIssue(title: string, description: string): Promise<JiraIssue> {
     const response = await this.request<{ key: string }>('POST', 'issue', {
       fields: {
-        project: { key: this.config.projectKey },
+        project: { key: this.config.projectKeys[0] ?? '' },
         issuetype: { name: this.config.issueType ?? 'Task' },
         summary: title,
         description: toADF(description),

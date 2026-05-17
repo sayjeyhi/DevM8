@@ -14,7 +14,7 @@ const config = {
   host: "test.atlassian.net",
   email: "user@example.com",
   apiToken: "secret-token",
-  projectKey: "PROJ",
+  projectKeys: ["PROJ"],
   issueType: "Task",
   requestTimeoutMs: 5000,
 }

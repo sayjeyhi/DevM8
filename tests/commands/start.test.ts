@@ -4,7 +4,7 @@ import { FriendlyError, ConfigMissingError } from "../../src/shared/errors"
 
 const validConfig = {
   telegram: { bot_token: "123:abc" },
-  jira: { base_url: "https://test.atlassian.net", api_token: "token", email: "e@e.com", project_key: "TEST" },
+  jira: { base_url: "https://test.atlassian.net", api_token: "token", email: "e@e.com", project_keys: ["TEST"] },
   claude: { binary_path: "/usr/bin/true" },
   app: { log_level: "info" as const },
 }
