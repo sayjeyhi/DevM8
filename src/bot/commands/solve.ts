@@ -3,13 +3,12 @@ import { JiraAuthError, JiraNotFoundError, ClaudeTimeoutError, ClaudeExitError }
 import { parseArgs } from "../utils/parseArgs"
 import { splitMessage } from "../utils/splitMessage"
 
-// TODO: replace with import from '../commands/index' once section-07 is complete
 interface Clients {
   jira: {
     getIssue(key: string): Promise<{ key: string; summary: string; status: string; description: string }>
   }
   claude: {
-    ask(prompt: string): Promise<string>
+    ask(prompt: string, options?: { onProgress?: (lines: string[]) => Promise<void> }): Promise<string>
   }
 }
 
@@ -27,14 +26,26 @@ Analyze the issue and respond with:
 
 Be concise and practical.`
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 export async function solveByKey(ctx: Context, clients: Clients, key: string): Promise<void> {
-  await ctx.reply(`Analyzing ${key} with Claude...`)
-  let typingInterval: ReturnType<typeof setInterval> | undefined
+  const progressMsg = await ctx.reply(
+    `🔍 Analyzing <b>${escHtml(key)}</b> with Claude...`,
+    { parse_mode: "HTML" },
+  )
+  const chatId = ctx.chat!.id
+  const msgId = progressMsg.message_id
+
+  const editProgress = async (text: string) => {
+    try {
+      await ctx.api.editMessageText(chatId, msgId, text, { parse_mode: "HTML" })
+    } catch { /* ignore "message not modified" and other transient edit errors */ }
+  }
+
   try {
     await ctx.replyWithChatAction("typing")
-    typingInterval = setInterval(() => {
-      ctx.replyWithChatAction("typing").catch(() => {})
-    }, 4000)
 
     const issue = await clients.jira.getIssue(key)
 
@@ -46,7 +57,16 @@ export async function solveByKey(ctx: Context, clients: Clients, key: string): P
       .replace("{STATUS}", issue.status)
       .replace("{DESCRIPTION}", issue.description ?? "")
 
-    const response = await clients.claude.ask(prompt)
+    const response = await clients.claude.ask(prompt, {
+      onProgress: async (lines: string[]) => {
+        const preview = lines.map(escHtml).join('\n')
+        await editProgress(
+          `🔍 Analyzing <b>${escHtml(key)}</b> with Claude...\n\n<pre>${preview}</pre>`,
+        )
+      },
+    })
+
+    await editProgress(`✅ Analysis complete for <b>${escHtml(key)}</b>`)
     for (const chunk of splitMessage(response)) {
       await ctx.reply(chunk)
     }
@@ -67,8 +87,6 @@ export async function solveByKey(ctx: Context, clients: Clients, key: string): P
     const message = err instanceof Error ? err.message : String(err)
     console.log({ event: "error", command: "solve", errorMessage: message })
     await ctx.reply("Something went wrong. Please try again.")
-  } finally {
-    if (typingInterval !== undefined) clearInterval(typingInterval)
   }
 }
 

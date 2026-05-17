@@ -15,12 +15,12 @@ export async function stopCommand(): Promise<void> {
     throw err
   }
   await removePid()
-  appendToLogFile(PATHS.logFile, "info", "service stopped", { via: "devmate stop" })
-  process.stdout.write("devmate stopped\n")
+  appendToLogFile(PATHS.logFile, "info", "service stopped", { via: "devm8 stop" })
+  process.stdout.write("devm8 stopped\n")
 }
 
 export default defineCommand({
-  meta: { name: "stop", description: "Stop the DevMate daemon" },
+  meta: { name: "stop", description: "Stop the DevM8 daemon" },
   async run() {
     await stopCommand()
   },

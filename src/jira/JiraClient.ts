@@ -144,6 +144,11 @@ export class JiraClient {
     })
   }
 
+  async getProjects(): Promise<Array<{ key: string; name: string }>> {
+    const response = await this.request<Array<{ key: string; name: string }>>('GET', 'project')
+    return response.map(p => ({ key: p.key, name: p.name }))
+  }
+
   async getStatuses(): Promise<Array<{ id: string; name: string; category: string }>> {
     const response = await this.request<Array<{ id: string; name: string; statusCategory: { name: string } }>>('GET', 'status')
     return response.map(s => ({ id: s.id, name: s.name, category: s.statusCategory.name }))
@@ -153,10 +158,12 @@ export class JiraClient {
     limit = 5,
     nextPageToken?: string,
     status?: string,
+    projectKey?: string,
   ): Promise<{ issues: JiraIssue[]; nextPageToken?: string }> {
-    const jql = status
-      ? `assignee = currentUser() AND status = "${status}" ORDER BY updated DESC`
-      : 'assignee = currentUser() ORDER BY updated DESC'
+    const filters = ['assignee = currentUser()']
+    if (projectKey) filters.push(`project = "${projectKey}"`)
+    if (status) filters.push(`status = "${status}"`)
+    const jql = `${filters.join(' AND ')} ORDER BY updated DESC`
     const body: Record<string, unknown> = { jql, maxResults: limit, fields: ['summary', 'status'] }
     if (nextPageToken) body.nextPageToken = nextPageToken
 

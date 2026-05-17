@@ -10,6 +10,7 @@ import { handleSolve } from "./solve"
 import { handleLogs } from "./logs"
 import {
   handleMyTickets,
+  handleMyTicketsProject,
   handleMyTicketsStatus,
   handleMyTicketsPage,
   handleTicketDetails,
@@ -62,6 +63,11 @@ export async function registerCommands(bot: Bot, clients: Clients): Promise<void
       const key = payload.slice(7)
       await handleTicketDetails(ctx, clients, key)
     }
+  })
+
+  bot.callbackQuery(/^myt:proj:(.+)$/, async ctx => {
+    const projectKey = (ctx.match as RegExpMatchArray)[1]
+    await handleMyTicketsProject(ctx, clients, projectKey)
   })
 
   bot.callbackQuery(/^myt:s:(.*)$/, async ctx => {

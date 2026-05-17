@@ -10,7 +10,7 @@ import { startCommand } from "./start"
 
 declare const __VERSION__: string
 
-const REPO = "sayjeyhi/DevMate"
+const REPO = "sayjeyhi/DevM8"
 
 function currentVersion(): string {
   return typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0-dev"
@@ -25,9 +25,9 @@ async function fetchLatestVersion(): Promise<string> {
 
 function binaryName(): string {
   const { platform, arch } = process
-  if (platform === "darwin" && arch === "arm64") return "devmate-macos-arm64"
-  if (platform === "darwin" && arch === "x64")   return "devmate-macos-x64"
-  if (platform === "linux"  && arch === "x64")   return "devmate-linux-x64"
+  if (platform === "darwin" && arch === "arm64") return "devm8-macos-arm64"
+  if (platform === "darwin" && arch === "x64")   return "devm8-macos-x64"
+  if (platform === "linux"  && arch === "x64")   return "devm8-linux-x64"
   throw new FriendlyError(
     `Unsupported platform: ${platform}/${arch}`,
     "Pre-built binaries are available for macOS arm64/x64 and Linux x64 only."
@@ -59,7 +59,7 @@ function verifyChecksum(binaryPath: string, checksumsPath: string, name: string)
 }
 
 export default defineCommand({
-  meta: { name: "update", description: "Update DevMate to the latest release" },
+  meta: { name: "update", description: "Update DevM8 to the latest release" },
   async run() {
     const current = currentVersion()
     if (current === "0.0.0-dev") {

@@ -19,7 +19,7 @@ export async function runWizard(existing?: AppConfig): Promise<AppConfig> {
     )
   }
 
-  intro("DevMate setup")
+  intro("DevM8 setup")
 
   const result = await group(
     {

@@ -24,9 +24,9 @@ const appVersion = typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0-dev
 
 const main = defineCommand({
   meta: {
-    name: "devmate",
+    name: "devm8",
     version: appVersion,
-    description: "Manage your DevMate Telegram bot daemon",
+    description: "Manage your DevM8 Telegram bot daemon",
   },
   subCommands: {
     start:  () => import("./commands/start").then(m => m.default),

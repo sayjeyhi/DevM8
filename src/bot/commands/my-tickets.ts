@@ -9,7 +9,10 @@ export const PAGE_SIZE = 5
 const DESC_LIMIT = 800
 
 // tokens[pageN] = nextPageToken needed to fetch page N (undefined = first page, no token needed)
-const pageCache = new Map<number, { tokens: Map<number, string | undefined>; hasNext: Map<number, boolean>; status?: string }>()
+const pageCache = new Map<number, { tokens: Map<number, string | undefined>; hasNext: Map<number, boolean>; status?: string; projectKey?: string }>()
+
+// chatId → selected project key, set during project picker step
+const projectCache = new Map<number, string>()
 
 // Stores available transitions per chatId+key while user picks one
 const transitionCache = new Map<number, Map<string, Array<{ id: string; name: string }>>>()
@@ -88,23 +91,17 @@ const CATEGORY_ORDER: Record<string, number> = { "To Do": 0, "In Progress": 1, "
 export async function handleMyTickets(ctx: Context, { jira }: Clients): Promise<void> {
   const stopTyping = keepTyping(ctx)
   try {
-    const statuses = await jira.getStatuses().finally(stopTyping)
+    const projects = await jira.getProjects().finally(stopTyping)
 
-    // Sort by workflow category order, deduplicate names
-    const seen = new Set<string>()
-    const sorted = statuses
-      .filter(s => { const dup = seen.has(s.name); seen.add(s.name); return !dup })
-      .sort((a, b) => (CATEGORY_ORDER[a.category] ?? 99) - (CATEGORY_ORDER[b.category] ?? 99))
-
-    const buttons: CallbackButton[] = [
-      { text: "📋 All", callback_data: "myt:s:" },
-      ...sorted.map(s => ({ text: `${statusEmoji(s.name)} ${s.name}`, callback_data: `myt:s:${s.name}` })),
-    ]
+    const buttons: CallbackButton[] = projects.map(p => ({
+      text: `📁 ${p.key} — ${p.name}`,
+      callback_data: `myt:proj:${p.key}`,
+    }))
 
     const rows: CallbackButton[][] = []
-    for (let i = 0; i < buttons.length; i += 3) rows.push(buttons.slice(i, i + 3))
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2))
 
-    await ctx.reply("Select a status to filter your tickets:", {
+    await ctx.reply("Select a project:", {
       reply_markup: { inline_keyboard: rows },
     })
   } catch (err) {
@@ -119,10 +116,49 @@ export async function handleMyTickets(ctx: Context, { jira }: Clients): Promise<
   }
 }
 
+export async function handleMyTicketsProject(ctx: Context, { jira }: Clients, projectKey: string): Promise<void> {
+  const chatId = ctx.chat!.id
+  projectCache.set(chatId, projectKey)
+  const stopTyping = keepTyping(ctx)
+  try {
+    const statuses = await jira.getStatuses().finally(stopTyping)
+
+    const seen = new Set<string>()
+    const sorted = statuses
+      .filter(s => { const dup = seen.has(s.name); seen.add(s.name); return !dup })
+      .sort((a, b) => (CATEGORY_ORDER[a.category] ?? 99) - (CATEGORY_ORDER[b.category] ?? 99))
+
+    const buttons: CallbackButton[] = [
+      { text: "📋 All", callback_data: "myt:s:" },
+      ...sorted.map(s => ({ text: `${statusEmoji(s.name)} ${s.name}`, callback_data: `myt:s:${s.name}` })),
+    ]
+
+    const rows: CallbackButton[][] = []
+    for (let i = 0; i < buttons.length; i += 3) rows.push(buttons.slice(i, i + 3))
+
+    await ctx.reply(`<b>${escapeHtml(projectKey)}</b> — select a status:`, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: rows },
+    })
+  } catch (err) {
+    stopTyping()
+    if (err instanceof JiraAuthError) {
+      await ctx.reply("Authentication failed. Please check your Jira API token.")
+      return
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    console.log({ event: "error", command: "my_tickets_project", projectKey, errorMessage: message })
+    await ctx.reply("Something went wrong. Please try again.")
+  } finally {
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery()
+  }
+}
+
 export async function handleMyTicketsStatus(ctx: Context, { jira }: Clients, status: string): Promise<void> {
   const chatId = ctx.chat!.id
+  const projectKey = projectCache.get(chatId)
   try {
-    const { issues, nextPageToken } = await jira.getMyIssues(PAGE_SIZE, undefined, status || undefined)
+    const { issues, nextPageToken } = await jira.getMyIssues(PAGE_SIZE, undefined, status || undefined, projectKey)
 
     if (issues.length === 0) {
       const label = status ? `with status <b>${escapeHtml(status)}</b>` : ""
@@ -133,7 +169,7 @@ export async function handleMyTicketsStatus(ctx: Context, { jira }: Clients, sta
     const tokens = new Map<number, string | undefined>([[0, undefined]])
     const hasNext = new Map<number, boolean>([[0, !!nextPageToken]])
     if (nextPageToken) tokens.set(1, nextPageToken)
-    pageCache.set(chatId, { tokens, hasNext, status: status || undefined })
+    pageCache.set(chatId, { tokens, hasNext, status: status || undefined, projectKey })
 
     const botUsername = ctx.me?.username
     const text = formatTicketsPage(issues, 0, !!nextPageToken, botUsername, status || undefined)
@@ -159,7 +195,7 @@ export async function handleMyTicketsPage(ctx: Context, { jira }: Clients, page:
     const cache = pageCache.get(chatId)
     const token = cache?.tokens.get(page)
 
-    const { issues, nextPageToken } = await jira.getMyIssues(PAGE_SIZE, token, cache?.status)
+    const { issues, nextPageToken } = await jira.getMyIssues(PAGE_SIZE, token, cache?.status, cache?.projectKey)
 
     if (cache) {
       cache.hasNext.set(page, !!nextPageToken)

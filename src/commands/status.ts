@@ -37,7 +37,7 @@ export async function statusCommand(): Promise<void> {
   }
 
   const state = running ? (devMode ? "running (dev)" : "running") : "stopped"
-  const lines: string[] = ["devmate status"]
+  const lines: string[] = ["devm8 status"]
   lines.push(`  State:       ${state}`)
   if (running && activePid !== null) lines.push(`  PID:         ${activePid}`)
   if (running && uptime) lines.push(`  Uptime:      ${uptime}`)
@@ -52,7 +52,7 @@ export async function statusCommand(): Promise<void> {
 }
 
 export default defineCommand({
-  meta: { name: "status", description: "Show DevMate daemon status" },
+  meta: { name: "status", description: "Show DevM8 daemon status" },
   async run() {
     await statusCommand()
   },

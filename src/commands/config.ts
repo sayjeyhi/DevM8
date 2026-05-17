@@ -19,7 +19,7 @@ export async function configCommand(): Promise<void> {
 }
 
 export default defineCommand({
-  meta: { name: "config", description: "Configure DevMate" },
+  meta: { name: "config", description: "Configure DevM8" },
   async run() {
     await configCommand()
   },

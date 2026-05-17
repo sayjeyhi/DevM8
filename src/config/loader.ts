@@ -15,8 +15,8 @@ export async function loadConfig(configPath?: string): Promise<AppConfig> {
     const code = (e as NodeJS.ErrnoException).code
     if (code === "ENOENT") {
       throw new FriendlyError(
-        `Config file not found at ${resolvedPath}. Run \`devmate config\` to create it.`,
-        "Run `devmate config` to set up your configuration."
+        `Config file not found at ${resolvedPath}. Run \`devm8 config\` to create it.`,
+        "Run `devm8 config` to set up your configuration."
       )
     }
     if (code === "EACCES") {

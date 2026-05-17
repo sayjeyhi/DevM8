@@ -51,7 +51,7 @@ function formatLine(raw: string): string {
 }
 
 export default defineCommand({
-  meta: { name: "logs", description: "Show DevMate daemon logs" },
+  meta: { name: "logs", description: "Show DevM8 daemon logs" },
   args: {
     tail: {
       type: "string",
@@ -72,7 +72,7 @@ export default defineCommand({
 
     if (!existsSync(logFile)) {
       process.stdout.write(`No log file at ${displayPath}\n`)
-      process.stdout.write("Start the daemon first: devmate start\n")
+      process.stdout.write("Start the daemon first: devm8 start\n")
       return
     }
 

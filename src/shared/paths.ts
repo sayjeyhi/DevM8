@@ -2,7 +2,7 @@ import { homedir } from "os"
 import { join } from "path"
 
 const home = homedir()
-const configDir = join(home, ".config/devmate")
+const configDir = join(home, ".config/devm8")
 const logsDir = join(configDir, "logs")
 const launchAgentsDir = join(home, "Library/LaunchAgents")
 
@@ -13,6 +13,6 @@ export const PATHS = {
   logsDir,
   logFile:         join(logsDir, "app.log"),
   pidFile:         join(configDir, "daemon.pid"),
-  plistFile:       join(launchAgentsDir, "net.devmate.plist"),
+  plistFile:       join(launchAgentsDir, "net.devm8.plist"),
   launchAgentsDir,
 }

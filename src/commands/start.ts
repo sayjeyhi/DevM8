@@ -12,7 +12,7 @@ import { appendToLogFile } from "../logger/index"
 async function preflight(): Promise<void> {
   if (process.platform !== "darwin") {
     throw new FriendlyError(
-      "DevMate requires macOS",
+      "DevM8 requires macOS",
       "This tool uses launchd, which is only available on macOS."
     )
   }
@@ -32,7 +32,7 @@ async function preflight(): Promise<void> {
   } catch {
     throw new FriendlyError(
       `Claude binary not executable at ${config.claude.binary_path}`,
-      "Run `which claude` to find the correct path, then update with `devmate config`."
+      "Run `which claude` to find the correct path, then update with `devm8 config`."
     )
   }
 }
@@ -58,8 +58,8 @@ export async function startCommand(): Promise<void> {
   while (Date.now() < deadline) {
     const s = await agentStatus()
     if (s.running) {
-      appendToLogFile(PATHS.logFile, "info", "service started", { pid: s.pid, via: "devmate start" })
-      process.stdout.write(`devmate started (PID ${s.pid})\n`)
+      appendToLogFile(PATHS.logFile, "info", "service started", { pid: s.pid, via: "devm8 start" })
+      process.stdout.write(`devm8 started (PID ${s.pid})\n`)
       return
     }
     await Bun.sleep(200)
@@ -67,14 +67,14 @@ export async function startCommand(): Promise<void> {
 
   const finalStatus = await agentStatus()
   process.stderr.write(
-    `devmate failed to start. Last exit code: ${finalStatus.exitCode ?? "unknown"}\n` +
-    `Hint: check \`devmate status\` or ${PATHS.logFile}\n`
+    `devm8 failed to start. Last exit code: ${finalStatus.exitCode ?? "unknown"}\n` +
+    `Hint: check \`devm8 status\` or ${PATHS.logFile}\n`
   )
   process.exit(1)
 }
 
 export default defineCommand({
-  meta: { name: "start", description: "Start the DevMate daemon" },
+  meta: { name: "start", description: "Start the DevM8 daemon" },
   async run() {
     await startCommand()
   },

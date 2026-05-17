@@ -12,4 +12,6 @@ export interface AskOptions {
   timeoutMs?: number
   /** Overrides ClaudeConfig.model for this specific call. */
   model?: string
+  /** Called periodically with the last ≤10 lines of text generated so far. */
+  onProgress?: (lines: string[]) => Promise<void>
 }

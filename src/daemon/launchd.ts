@@ -34,7 +34,7 @@ export function generatePlist(binaryPath: string): string {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>net.devmate</string>
+    <string>net.devm8</string>
     <key>ProgramArguments</key>
     <array>
         <string>${xmlEscape(binaryPath)}</string>
@@ -107,7 +107,7 @@ function parsePrintOutput(output: string): AgentStatus {
 
 function parseListOutput(output: string): AgentStatus {
   const lines = output.trim().split("\n")
-  const line = lines.find(l => l.split("\t")[2]?.trim() === "net.devmate")
+  const line = lines.find(l => l.split("\t")[2]?.trim() === "net.devm8")
   if (!line) return { running: false }
 
   const [pidStr, exitCodeStr] = line.split("\t")
@@ -128,7 +128,7 @@ export async function agentStatus(): Promise<AgentStatus> {
 
   const { exitCode: printExit, stdout: printOut } = await runLaunchctl([
     "print",
-    `gui/${uid}/net.devmate`,
+    `gui/${uid}/net.devm8`,
   ])
 
   if (printExit === 0) {
@@ -137,7 +137,7 @@ export async function agentStatus(): Promise<AgentStatus> {
 
   const { exitCode: listExit, stdout: listOut } = await runLaunchctl([
     "list",
-    "net.devmate",
+    "net.devm8",
   ])
 
   if (listExit !== 0) {

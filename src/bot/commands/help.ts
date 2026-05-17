@@ -1,6 +1,6 @@
 import type { Context } from "grammy"
 
-export const HELP_TEXT = `DevMate Commands:
+export const HELP_TEXT = `DevM8 Commands:
 
 /create <title> [-- <description>]
   Create a Jira issue. Claude enriches the description if provided.
