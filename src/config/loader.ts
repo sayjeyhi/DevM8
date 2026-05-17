@@ -2,7 +2,7 @@ import { parse, stringify } from "smol-toml"
 import { dirname } from "node:path"
 import { writeFile, rename, mkdir, chmod } from "node:fs/promises"
 import { AppConfigSchema, type AppConfig } from "./schema"
-import { FriendlyError } from "../shared/errors"
+import { FriendlyError, ConfigMissingError } from "../shared/errors"
 import { PATHS } from "../shared/paths"
 
 export async function loadConfig(configPath?: string): Promise<AppConfig> {
@@ -14,10 +14,7 @@ export async function loadConfig(configPath?: string): Promise<AppConfig> {
   } catch (e: unknown) {
     const code = (e as NodeJS.ErrnoException).code
     if (code === "ENOENT") {
-      throw new FriendlyError(
-        `Config file not found at ${resolvedPath}. Run \`devm8 config\` to create it.`,
-        "Run `devm8 config` to set up your configuration."
-      )
+      throw new ConfigMissingError(resolvedPath)
     }
     if (code === "EACCES") {
       throw new FriendlyError(`Permission denied reading config at ${resolvedPath}.`)

@@ -53,6 +53,7 @@ export class ClaudeClient {
     const args = [
       this.config.binaryPath,
       '--print',
+      '--verbose',
       '--dangerously-skip-permissions',
       '--output-format',
       'stream-json',

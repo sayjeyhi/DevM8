@@ -1,5 +1,5 @@
 import { defineCommand, runMain } from "citty"
-import { FriendlyError } from "./shared/errors"
+import { FriendlyError, ConfigMissingError } from "./shared/errors"
 import type { Logger } from "./logger/index"
 import type { AppConfig } from "./config/schema"
 import { startBotFromConfig } from "./bot/bot"
@@ -39,7 +39,21 @@ const main = defineCommand({
   },
 })
 
-runMain(main).catch(err => {
+runMain(main).catch(async err => {
+  if (err instanceof ConfigMissingError) {
+    process.stdout.write("\nNo config found — starting setup...\n\n")
+    try {
+      const { configCommand } = await import("./commands/config")
+      await configCommand()
+      process.stdout.write("\nRun your command again to continue.\n")
+    } catch (wizardErr) {
+      if (wizardErr instanceof FriendlyError) {
+        process.stderr.write(`Setup error: ${wizardErr.message}\n`)
+      }
+      process.exit(1)
+    }
+    return
+  }
   if (err instanceof FriendlyError) {
     process.stderr.write(`Error: ${err.message}\n`)
     if (err.hint) process.stderr.write(`Hint: ${err.hint}\n`)

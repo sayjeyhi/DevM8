@@ -2,8 +2,9 @@ import { realpathSync } from "node:fs"
 import { mkdir, access, constants } from "node:fs/promises"
 import { defineCommand } from "citty"
 import { PATHS } from "../shared/paths"
-import { FriendlyError } from "../shared/errors"
-import { loadConfig, configExists, writeConfig } from "../config/loader"
+import { FriendlyError, ConfigMissingError } from "../shared/errors"
+import { loadConfig, writeConfig } from "../config/loader"
+import type { AppConfig } from "../config/schema"
 import { runWizard } from "../config/wizard"
 import { agentStatus, writePlist, loadAgent } from "../daemon/launchd"
 import { stopCommand } from "./stop"
@@ -16,16 +17,28 @@ async function preflight(): Promise<void> {
       "This tool uses launchd, which is only available on macOS."
     )
   }
-
   await mkdir(PATHS.launchAgentsDir, { recursive: true })
+}
 
-  let config
+async function resolveConfig(): Promise<AppConfig> {
   try {
-    config = await loadConfig()
+    return await loadConfig()
   } catch (err) {
-    if (err instanceof FriendlyError) return  // config not yet created
+    if (err instanceof ConfigMissingError) {
+      process.stdout.write("No config found — starting setup...\n\n")
+      const result = await runWizard()
+      await writeConfig(result)
+      process.stdout.write("\n")
+      return result
+    }
     throw err
   }
+}
+
+export async function startCommand(): Promise<void> {
+  await preflight()
+
+  const config = await resolveConfig()
 
   try {
     await access(config.claude.binary_path, constants.X_OK)
@@ -34,15 +47,6 @@ async function preflight(): Promise<void> {
       `Claude binary not executable at ${config.claude.binary_path}`,
       "Run `which claude` to find the correct path, then update with `devm8 config`."
     )
-  }
-}
-
-export async function startCommand(): Promise<void> {
-  await preflight()
-
-  if (!(await configExists())) {
-    const result = await runWizard()
-    await writeConfig(result)
   }
 
   const status = await agentStatus()

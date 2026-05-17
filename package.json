@@ -5,7 +5,8 @@
     "test": "bun test tests/",
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts stop 2>/dev/null; bun --watch --inspect run src/index.ts daemon",
-    "dev:logs": "bun run src/index.ts logs"
+    "dev:logs": "bun run src/index.ts logs",
+    "dev:start": "bun run src/index.ts start"
   },
   "dependencies": {
     "@clack/prompts": "^1.4.0",

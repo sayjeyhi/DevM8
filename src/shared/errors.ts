@@ -7,6 +7,18 @@ export class FriendlyError extends Error {
   }
 }
 
+export class ConfigMissingError extends FriendlyError {
+  readonly configPath: string
+  constructor(configPath: string) {
+    super(
+      `Config file not found at ${configPath}. Run \`devm8 config\` to create it.`,
+      "Run `devm8 config` to set up your configuration."
+    )
+    this.name = "ConfigMissingError"
+    this.configPath = configPath
+  }
+}
+
 export class LaunchctlError extends FriendlyError {
   readonly rawOutput: string
   constructor(stderr: string, hint: string) {

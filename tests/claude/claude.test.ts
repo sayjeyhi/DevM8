@@ -118,6 +118,7 @@ describe("subprocess invocation", () => {
 
       const args = (spawnSpy.mock.calls[0] as [string[]])[0]
       expect(args).toContain("--print")
+      expect(args).toContain("--verbose")
       expect(args).not.toContain("--bare")
       expect(args).not.toContain("--no-session-persistence")
       expect(args).toContain("--output-format")

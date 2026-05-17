@@ -3,7 +3,7 @@ import { join } from "path"
 import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "os"
 import { loadConfig, configExists, writeConfig } from "../../src/config/loader"
-import { FriendlyError } from "../../src/shared/errors"
+import { FriendlyError, ConfigMissingError } from "../../src/shared/errors"
 import type { AppConfig } from "../../src/config/schema"
 
 const VALID_TOML = `
@@ -91,12 +91,14 @@ binary_path = "/usr/bin/claude"
     expect(err).toBeInstanceOf(FriendlyError)
   })
 
-  it("throws FriendlyError with devm8 config hint when file not found", async () => {
+  it("throws ConfigMissingError (subtype of FriendlyError) when file not found", async () => {
     let err: unknown
     try { await loadConfig("/nonexistent/path/config.toml") } catch (e) { err = e }
+    expect(err).toBeInstanceOf(ConfigMissingError)
     expect(err).toBeInstanceOf(FriendlyError)
-    const friendly = err as FriendlyError
-    expect(friendly.message).toContain("devm8 config")
+    const e = err as ConfigMissingError
+    expect(e.message).toContain("devm8 config")
+    expect(e.configPath).toBe("/nonexistent/path/config.toml")
   })
 })
 

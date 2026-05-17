@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, spyOn, beforeEach } from "bun:test"
 import { realpathSync } from "node:fs"
-import { FriendlyError } from "../../src/shared/errors"
+import { FriendlyError, ConfigMissingError } from "../../src/shared/errors"
 
 const validConfig = {
   telegram: { bot_token: "123:abc" },
@@ -125,8 +125,10 @@ describe("startCommand()", () => {
     accessMock.mockImplementation(() => Promise.resolve())
   })
 
-  it("triggers wizard flow when no config exists (mocks runWizard and writeConfig)", async () => {
-    configExistsMock.mockImplementation(() => Promise.resolve(false))
+  it("triggers wizard flow when config is missing (loadConfig throws ConfigMissingError)", async () => {
+    loadConfigMock.mockImplementationOnce(() =>
+      Promise.reject(new ConfigMissingError("/path/to/config.toml"))
+    )
     runWizardMock.mockClear()
     writeConfigMock.mockClear()
 
