@@ -10,6 +10,7 @@ import {
   validateEmail,
   validateProjectKeys,
   validateBinaryPath,
+  validateRepoPath,
 } from "./validators"
 
 function cancel<T>(value: T): T {
@@ -130,12 +131,20 @@ export async function runWizard(
     initialValue: existing?.claude.api_key ?? "",
   }))
 
+  const repo_path = cancel(await text({
+    message: "Local git repository path for ticket implementation (leave blank to skip)",
+    initialValue: existing?.repo?.path ?? "",
+    validate: validateRepoPath,
+  }))
+
   outro("Setup complete!")
 
   const allowedUserIds = (allowed_user_ids as string)
     .split(",")
     .map(s => parseInt(s.trim(), 10))
     .filter(n => !isNaN(n) && n > 0)
+
+  const repoPathTrimmed = (repo_path as string).trim()
 
   return {
     telegram: { bot_token: bot_token as string, allowed_user_ids: allowedUserIds },
@@ -149,6 +158,7 @@ export async function runWizard(
       binary_path: binary_path as string,
       ...((api_key as string).trim() ? { api_key: (api_key as string).trim() } : {}),
     },
+    ...(repoPathTrimmed ? { repo: { path: repoPathTrimmed } } : {}),
     app: { log_level: existing?.app.log_level ?? "info" },
   }
 }

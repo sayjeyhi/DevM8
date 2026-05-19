@@ -17,7 +17,7 @@ interface BunSubprocess {
 declare const Bun: {
   spawn(
     args: string[],
-    opts: { stdin: 'pipe'; stdout: 'pipe'; stderr: 'pipe'; env: Record<string, string | undefined> },
+    opts: { stdin: 'pipe'; stdout: 'pipe'; stderr: 'pipe'; env: Record<string, string | undefined>; cwd?: string },
   ): BunSubprocess
   sleep(ms: number): Promise<void>
 }
@@ -72,6 +72,7 @@ export class ClaudeClient {
       stdout: 'pipe',
       stderr: 'pipe',
       env: clonedEnv,
+      cwd: options?.cwd,
     })
 
     proc.stdin.write(prompt)

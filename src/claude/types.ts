@@ -14,4 +14,6 @@ export interface AskOptions {
   model?: string
   /** Called periodically with the last ≤10 lines of text generated so far. */
   onProgress?: (lines: string[]) => Promise<void>
+  /** Working directory for the Claude subprocess. Defaults to process.cwd(). */
+  cwd?: string
 }

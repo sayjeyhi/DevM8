@@ -2,11 +2,12 @@ import type { Bot, Context } from "grammy"
 import { CommandGroup } from "@grammyjs/commands"
 import type { JiraClient } from "../../jira/JiraClient"
 import type { ClaudeClient } from "../../claude/ClaudeClient"
+import type { GitClient } from "../../git/GitClient"
 import { handleCreate } from "./create"
 import { handleMove } from "./move"
 import { handleComment } from "./comment"
 import { handleHelp } from "./help"
-import { handleSolve } from "./solve"
+import { handleSolve, handleBranchChoice } from "./solve"
 import { handleLogs } from "./logs"
 import {
   handleMyTickets,
@@ -24,6 +25,7 @@ import {
 export interface Clients {
   jira: JiraClient
   claude: ClaudeClient
+  git?: GitClient
 }
 
 export async function registerCommands(bot: Bot, clients: Clients): Promise<void> {
@@ -98,6 +100,11 @@ export async function registerCommands(bot: Bot, clients: Clients): Promise<void
   bot.callbackQuery(/^tkt:comment:([A-Z]+-\d+)$/, async ctx => {
     const key = (ctx.match as RegExpMatchArray)[1]
     await handleCommentStart(ctx, key)
+  })
+
+  bot.callbackQuery(/^tkt:branch:([A-Z]+-\d+):(new|curr)$/, async ctx => {
+    const [, key, choice] = ctx.match as RegExpMatchArray
+    await handleBranchChoice(ctx, clients, key, choice as "new" | "curr")
   })
 
   // setCommands syncs the UI menu — failure is non-fatal, bot routing still works

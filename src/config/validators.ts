@@ -42,3 +42,11 @@ export function validateProjectKeys(v: string): string | undefined {
 export function validateBinaryPath(v: string): string | undefined {
   return v && existsSync(v) ? undefined : "File not found at this path"
 }
+
+export async function validateRepoPath(v: string): Promise<string | undefined> {
+  if (!v || v.trim() === "") return undefined  // blank = skip (optional)
+  if (!existsSync(v)) return "Directory not found at this path"
+  const proc = Bun.spawn(["git", "-C", v, "rev-parse", "--git-dir"], { stdout: "pipe", stderr: "pipe" })
+  const exitCode = await proc.exited
+  if (exitCode !== 0) return "Not a git repository"
+}

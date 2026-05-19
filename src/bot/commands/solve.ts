@@ -1,5 +1,7 @@
 import type { Context } from "grammy"
 import { JiraAuthError, JiraNotFoundError, ClaudeTimeoutError, ClaudeExitError } from "../../shared/errors"
+import type { AskOptions } from "../../claude/types"
+import type { GitClient } from "../../git/GitClient"
 import { parseArgs } from "../utils/parseArgs"
 import { splitMessage } from "../utils/splitMessage"
 
@@ -8,8 +10,9 @@ interface Clients {
     getIssue(key: string): Promise<{ key: string; summary: string; status: string; description: string }>
   }
   claude: {
-    ask(prompt: string, options?: { onProgress?: (lines: string[]) => Promise<void> }): Promise<string>
+    ask(prompt: string, options?: AskOptions): Promise<string>
   }
+  git?: GitClient
 }
 
 export const SOLVE_PROMPT_TEMPLATE = `You are a software engineer analyzing a Jira issue. Provide actionable next steps or a solution approach.
@@ -30,7 +33,12 @@ function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
-export async function solveByKey(ctx: Context, clients: Clients, key: string): Promise<void> {
+export async function solveByKey(
+  ctx: Context,
+  clients: Clients,
+  key: string,
+  options?: { cwd?: string },
+): Promise<void> {
   const progressMsg = await ctx.reply(
     `🔍 Analyzing <b>${escHtml(key)}</b> with Claude...`,
     { parse_mode: "HTML" },
@@ -58,6 +66,7 @@ export async function solveByKey(ctx: Context, clients: Clients, key: string): P
       .replace("{DESCRIPTION}", issue.description ?? "")
 
     const response = await clients.claude.ask(prompt, {
+      cwd: options?.cwd,
       onProgress: async (lines: string[]) => {
         const preview = lines.map(escHtml).join('\n')
         await editProgress(
@@ -90,11 +99,96 @@ export async function solveByKey(ctx: Context, clients: Clients, key: string): P
   }
 }
 
+function branchName(key: string): string {
+  return `feat/${key.toLowerCase()}`
+}
+
+export async function handleBranchPicker(ctx: Context, clients: Clients, key: string): Promise<void> {
+  const git = clients.git!
+  let branch: string
+  let clean: boolean
+
+  try {
+    ;[branch, clean] = await Promise.all([git.currentBranch(), git.isClean()])
+  } catch {
+    // git unavailable — skip picker, solve directly
+    await ctx.answerCallbackQuery()
+    await solveByKey(ctx, clients, key, { cwd: git.repoPath })
+    return
+  }
+
+  const statusLine = clean ? "✅ working tree clean" : "⚠️ uncommitted changes"
+  const newBranch = branchName(key)
+
+  await ctx.reply(
+    [
+      `🌿 <b>${escHtml(key)}</b> — select branch:`,
+      ``,
+      `Branch: <code>${escHtml(branch)}</code>`,
+      `Status: ${statusLine}`,
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[
+          { text: `🌿 New branch (${newBranch})`, callback_data: `tkt:branch:${key}:new` },
+          { text: `📌 Stay on ${branch}`, callback_data: `tkt:branch:${key}:curr` },
+        ]],
+      },
+    },
+  )
+  await ctx.answerCallbackQuery()
+}
+
+export async function handleBranchChoice(
+  ctx: Context,
+  clients: Clients,
+  key: string,
+  choice: "new" | "curr",
+): Promise<void> {
+  const git = clients.git!
+  const cwd = git.repoPath
+
+  if (choice === "new") {
+    const branch = branchName(key)
+    const statusMsg = await ctx.reply(
+      `⏳ Checking out <code>${escHtml(branch)}</code>...`,
+      { parse_mode: "HTML" },
+    )
+    const chatId = ctx.chat!.id
+    const msgId = statusMsg.message_id
+
+    try {
+      await git.checkoutNewBranchFromMain(branch)
+      await ctx.api.editMessageText(
+        chatId, msgId,
+        `✅ On branch <code>${escHtml(branch)}</code>`,
+        { parse_mode: "HTML" },
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log({ event: "error", command: "branch_checkout", branch, errorMessage: msg })
+      await ctx.api.editMessageText(
+        chatId, msgId,
+        `⚠️ Branch checkout failed — continuing on current branch`,
+        { parse_mode: "HTML" },
+      )
+    }
+  }
+
+  await ctx.answerCallbackQuery()
+  await solveByKey(ctx, clients, key, { cwd })
+}
+
 export async function handleSolve(ctx: Context, clients: Clients): Promise<void> {
   const args = parseArgs(ctx)
   const key = args[0]
   if (!key) {
     await ctx.reply("Usage: /solve <ticket-key>")
+    return
+  }
+  if (clients.git) {
+    await handleBranchPicker(ctx, clients, key)
     return
   }
   await solveByKey(ctx, clients, key)

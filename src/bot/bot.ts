@@ -6,6 +6,7 @@ import { createAuthMiddleware } from "./middleware/auth"
 import { registerCommands } from "./commands/index"
 import { JiraClient } from "../jira/JiraClient"
 import { ClaudeClient } from "../claude/ClaudeClient"
+import { GitClient } from "../git/GitClient"
 import type { AppConfig } from "../config/schema"
 import type { Logger } from "../logger/index"
 import { keepTyping } from "./utils/typing"
@@ -37,6 +38,7 @@ export async function startBotFromConfig(
     process.env.ANTHROPIC_API_KEY = config.claude.api_key
   }
   const claude = new ClaudeClient({ binaryPath: config.claude.binary_path }, claudeLog)
+  const git = config.repo ? new GitClient(config.repo.path) : undefined
 
   logger.info("jira connecting", { host: new URL(config.jira.base_url).host, projects: config.jira.project_keys })
   try {
@@ -54,7 +56,7 @@ export async function startBotFromConfig(
   const allowedIds = new Set(config.telegram.allowed_user_ids)
   bot.use(createAuthMiddleware(allowedIds, e => logger.warn("unauthorized", e)))
 
-  await registerCommands(bot, { jira, claude })
+  await registerCommands(bot, { jira, claude, git })
 
   bot.on("message:text", async ctx => {
     if (ctx.message.text.startsWith("/")) {
