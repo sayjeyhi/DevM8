@@ -10,7 +10,7 @@ import {
   validateEmail,
   validateProjectKeys,
   validateBinaryPath,
-  validateRepoPath,
+  validateRepoPaths,
 } from "./validators"
 
 function cancel<T>(value: T): T {
@@ -147,19 +147,23 @@ export async function runWizard(
     initialValue: existing?.claude.api_key ?? "",
   }))
 
-  const repo_path = cancel(await text({
-    message: "Local git repository path for ticket implementation (leave blank to skip)",
-    initialValue: existing?.repo?.path ?? "",
-    validate: toValidate(validateRepoPath),
-  }))
-
-  const repoPathTrimmed = (repo_path as string).trim()
-
-  if (repoPathTrimmed) {
-    const s = spinner()
-    s.start("Verifying git repository...")
-    const isRepo = await checkIsGitRepo(repoPathTrimmed)
-    s.stop(isRepo ? "Git repository confirmed" : "Warning: path exists but may not be a git repo")
+  const repos: Record<string, string[]> = {}
+  for (const projKey of project_keys) {
+    const raw = cancel(await text({
+      message: `Repo paths for ${projKey} (comma-separated, leave blank to skip)`,
+      initialValue: existing?.repos?.[projKey]?.join(", ") ?? "",
+      validate: toValidate(validateRepoPaths),
+    }))
+    const paths = (raw as string).split(",").map(s => s.trim()).filter(Boolean)
+    if (paths.length > 0) {
+      repos[projKey] = paths
+      for (const p of paths) {
+        const s = spinner()
+        s.start(`Verifying ${p}...`)
+        const isRepo = await checkIsGitRepo(p)
+        s.stop(isRepo ? `✓ ${p}` : `⚠ ${p} — not a git repo`)
+      }
+    }
   }
 
   outro("Setup complete!")
@@ -181,7 +185,7 @@ export async function runWizard(
       binary_path: binary_path as string,
       ...((api_key as string).trim() ? { api_key: (api_key as string).trim() } : {}),
     },
-    ...(repoPathTrimmed ? { repo: { path: repoPathTrimmed } } : {}),
+    ...(Object.keys(repos).length > 0 ? { repos } : {}),
     app: { log_level: existing?.app.log_level ?? "info" },
   }
 }

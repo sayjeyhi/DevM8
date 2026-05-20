@@ -7,6 +7,9 @@ import { registerCommands } from "./commands/index"
 import { JiraClient } from "../jira/JiraClient"
 import { ClaudeClient } from "../claude/ClaudeClient"
 import { GitClient } from "../git/GitClient"
+import { SlackClient } from "../slack/SlackClient"
+import { SlackPoller } from "../slack/SlackPoller"
+import { registerSlackHandlers, createSlackForwardHandler } from "./handlers/slackForward"
 import type { AppConfig } from "../config/schema"
 import type { Logger } from "../logger/index"
 import { keepTyping } from "./utils/typing"
@@ -38,7 +41,12 @@ export async function startBotFromConfig(
     process.env.ANTHROPIC_API_KEY = config.claude.api_key
   }
   const claude = new ClaudeClient({ binaryPath: config.claude.binary_path }, claudeLog)
-  const git = config.repo ? new GitClient(config.repo.path) : undefined
+  const gitMap = new Map<string, GitClient[]>()
+  if (config.repos) {
+    for (const [projKey, paths] of Object.entries(config.repos)) {
+      gitMap.set(projKey, paths.map(p => new GitClient(p)))
+    }
+  }
 
   logger.info("jira connecting", { host: new URL(config.jira.base_url).host, projects: config.jira.project_keys })
   try {
@@ -56,7 +64,29 @@ export async function startBotFromConfig(
   const allowedIds = new Set(config.telegram.allowed_user_ids)
   bot.use(createAuthMiddleware(allowedIds, e => logger.warn("unauthorized", e)))
 
-  await registerCommands(bot, { jira, claude, git })
+  if (config.slack) {
+    const slackClient = new SlackClient(config.slack.user_token)
+    const poller = new SlackPoller(slackClient, config.slack.poll_interval_ms)
+
+    // Register text interceptor before commands so it gets first pick on pending replies
+    registerSlackHandlers(bot, slackClient, claude)
+
+    poller.setMessageHandler(
+      createSlackForwardHandler(
+        config.telegram.allowed_user_ids,
+        (chatId, text, options) => bot.api.sendMessage(chatId, text, options as Parameters<typeof bot.api.sendMessage>[2]),
+      ),
+    )
+
+    signal.addEventListener("abort", () => {}, { once: true })
+    poller.start(signal).catch(err =>
+      logger.error("slack poller error", { message: (err as Error).message }),
+    )
+
+    logger.info("slack bridge active", { pollIntervalMs: config.slack.poll_interval_ms })
+  }
+
+  await registerCommands(bot, { jira, claude, gitMap: gitMap.size > 0 ? gitMap : undefined })
 
   bot.on("message:text", async ctx => {
     if (ctx.message.text.startsWith("/")) {

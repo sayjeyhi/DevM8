@@ -6,7 +6,8 @@
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts stop 2>/dev/null; bun --watch --inspect run src/index.ts daemon",
     "dev:logs": "bun run src/index.ts logs",
-    "dev:config": "bun run src/index.ts config"
+    "dev:config": "bun run src/index.ts config",
+    "dev:slackmap": "bun run src/index.ts slackmap"
   },
   "dependencies": {
     "@clack/prompts": "^1.4.0",

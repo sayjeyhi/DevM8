@@ -131,6 +131,14 @@ describe("writeConfig", () => {
     expect(loaded).toEqual(VALID_CONFIG)
   })
 
+  it("round-trips config with repos (writeConfig then loadConfig returns equal object)", async () => {
+    const configPath = join(tmpDir, "config-repos.toml")
+    const configWithRepos: AppConfig = { ...VALID_CONFIG, repos: { MYPROJECT: ["/tmp", "/var"] } }
+    await writeConfig(configWithRepos, configPath)
+    const loaded = await loadConfig(configPath)
+    expect(loaded).toEqual(configWithRepos)
+  })
+
   it("sets file permissions to 0o600", async () => {
     const configPath = join(tmpDir, "config.toml")
     await writeConfig(VALID_CONFIG, configPath)

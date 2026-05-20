@@ -31,6 +31,7 @@ import {
   validateApiToken,
   validateEmail,
   validateProjectKeys,
+  validateRepoPaths,
 } from "../../src/config/validators"
 
 let whichSpy: ReturnType<typeof spyOn<typeof Bun, "which">>
@@ -118,6 +119,14 @@ describe("runWizard", () => {
     expect(validateProjectKeys("123PROJ")).toBeTypeOf("string")
   })
 
+  it("validates repo paths: blank is valid (skip), existing dirs pass, missing dirs fail", () => {
+    expect(validateRepoPaths("")).toBeUndefined()
+    expect(validateRepoPaths("   ")).toBeUndefined()
+    expect(validateRepoPaths("/nonexistent/path/abc123")).toBeTypeOf("string")
+    expect(validateRepoPaths("/tmp")).toBeUndefined()
+    expect(validateRepoPaths("/tmp,/nonexistent/path")).toBeTypeOf("string")
+  })
+
   it("auto-fills claude.binary_path from PATH when not in existing config", async () => {
     whichSpy.mockImplementation((bin: string) => bin === "claude" ? "/auto/claude" : null)
     const captured: Record<string, string | undefined> = {}
@@ -143,6 +152,7 @@ describe("runWizard", () => {
       telegram: { bot_token: "111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", allowed_user_ids: [42, 99] },
       jira: { base_url: "https://co.atlassian.net", api_token: "tok", email: "a@b.com", project_keys: ["PROJ"] },
       claude: { binary_path: "/my/claude", api_key: "sk-ant-123" },
+      repos: { PROJ: ["/tmp"] },
       app: { log_level: "info" },
     }
 
@@ -155,6 +165,26 @@ describe("runWizard", () => {
     expect(captured["Jira project keys, comma-separated (e.g. MP,BZ)"]).toBe("PROJ")
     expect(captured["Path to claude binary"]).toBe("/my/claude")
     expect(captured["Your Telegram user ID(s), comma-separated (send /start to @userinfobot to get yours)"]).toBe("42, 99")
+    expect(captured["Repo paths for PROJ (comma-separated, leave blank to skip)"]).toBe("/tmp")
+  })
+
+  it("saves repos per project key when paths provided", async () => {
+    _textImpl = (opts) => {
+      if (opts.message.includes("Repo paths for MYPROJECT")) return Promise.resolve("/tmp")
+      return validTextImpl(opts)
+    }
+
+    const result = await withTTY(true, () => runWizard(undefined, noProjects))
+
+    expect(result.repos).toEqual({ MYPROJECT: ["/tmp"] })
+  })
+
+  it("omits repos from config when all paths left blank", async () => {
+    _textImpl = validTextImpl
+
+    const result = await withTTY(true, () => runWizard(undefined, noProjects))
+
+    expect(result.repos).toBeUndefined()
   })
 
   it("throws FriendlyError on Ctrl+C cancel", async () => {

@@ -1,6 +1,6 @@
 import type { Context } from "grammy"
 import type { Clients } from "./index"
-import { solveByKey, handleBranchPicker } from "./solve"
+import { solveByKey, handleRepoPicker } from "./solve"
 import { keepTyping } from "../utils/typing"
 import { JiraAuthError } from "../../shared/errors"
 import type { JiraIssue } from "../../jira/types"
@@ -258,8 +258,8 @@ export async function handleTicketDetails(ctx: Context, { jira }: Clients, key: 
 }
 
 export async function handleSolveTicket(ctx: Context, clients: Clients, key: string): Promise<void> {
-  if (clients.git) {
-    await handleBranchPicker(ctx, clients, key)
+  if (clients.gitMap) {
+    await handleRepoPicker(ctx, clients, key)
     return
   }
   await ctx.answerCallbackQuery()

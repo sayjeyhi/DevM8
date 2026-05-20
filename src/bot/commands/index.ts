@@ -7,7 +7,7 @@ import { handleCreate } from "./create"
 import { handleMove } from "./move"
 import { handleComment } from "./comment"
 import { handleHelp } from "./help"
-import { handleSolve, handleBranchChoice } from "./solve"
+import { handleSolve, handleBranchChoice, handleRepoChoice } from "./solve"
 import { handleLogs } from "./logs"
 import {
   handleMyTickets,
@@ -25,7 +25,7 @@ import {
 export interface Clients {
   jira: JiraClient
   claude: ClaudeClient
-  git?: GitClient
+  gitMap?: Map<string, GitClient[]>
 }
 
 export async function registerCommands(bot: Bot, clients: Clients): Promise<void> {
@@ -100,6 +100,11 @@ export async function registerCommands(bot: Bot, clients: Clients): Promise<void
   bot.callbackQuery(/^tkt:comment:([A-Z]+-\d+)$/, async ctx => {
     const key = (ctx.match as RegExpMatchArray)[1]
     await handleCommentStart(ctx, key)
+  })
+
+  bot.callbackQuery(/^tkt:repo:([A-Z]+-\d+):(\d+)$/, async ctx => {
+    const [, key, idxStr] = ctx.match as RegExpMatchArray
+    await handleRepoChoice(ctx, clients, key, parseInt(idxStr, 10))
   })
 
   bot.callbackQuery(/^tkt:branch:([A-Z]+-\d+):(new|curr)$/, async ctx => {

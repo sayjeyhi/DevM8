@@ -12,7 +12,7 @@ interface Clients {
   claude: {
     ask(prompt: string, options?: AskOptions): Promise<string>
   }
-  git?: GitClient
+  gitMap?: Map<string, GitClient[]>
 }
 
 export const SOLVE_PROMPT_TEMPLATE = `You are a software engineer analyzing a Jira issue. Provide actionable next steps or a solution approach.
@@ -32,6 +32,17 @@ Be concise and practical.`
 function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
+
+function projectKeyFromTicket(ticketKey: string): string {
+  return ticketKey.split("-")[0]
+}
+
+function branchName(key: string): string {
+  return `feat/${key.toLowerCase()}`
+}
+
+// chatId:ticketKey → GitClient resolved during repo picker or solve entry
+const pendingGits = new Map<string, GitClient>()
 
 export async function solveByKey(
   ctx: Context,
@@ -99,20 +110,75 @@ export async function solveByKey(
   }
 }
 
-function branchName(key: string): string {
-  return `feat/${key.toLowerCase()}`
+export async function handleRepoPicker(ctx: Context, clients: Clients, key: string): Promise<void> {
+  const projKey = projectKeyFromTicket(key)
+  const repos = clients.gitMap?.get(projKey)
+
+  if (!repos || repos.length === 0) {
+    await ctx.reply(
+      `No repos configured for <b>${escHtml(projKey)}</b>. Run <code>devm8 config</code> to add one.`,
+      { parse_mode: "HTML" },
+    )
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery()
+    return
+  }
+
+  if (repos.length === 1) {
+    const chatId = ctx.chat!.id
+    pendingGits.set(`${chatId}:${key}`, repos[0])
+    await handleBranchPicker(ctx, clients, key)
+    return
+  }
+
+  await ctx.reply(
+    `🗂 <b>${escHtml(key)}</b> — select repository:`,
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [repos.map((r, i) => ({
+          text: `📁 ${r.repoPath.split("/").at(-1) ?? r.repoPath}`,
+          callback_data: `tkt:repo:${key}:${i}`,
+        }))],
+      },
+    },
+  )
+  if (ctx.callbackQuery) await ctx.answerCallbackQuery()
+}
+
+export async function handleRepoChoice(
+  ctx: Context,
+  clients: Clients,
+  key: string,
+  idx: number,
+): Promise<void> {
+  const repos = clients.gitMap?.get(projectKeyFromTicket(key))
+  const git = repos?.[idx]
+  if (!git) {
+    await ctx.answerCallbackQuery("Repo not found")
+    return
+  }
+  const chatId = ctx.chat!.id
+  pendingGits.set(`${chatId}:${key}`, git)
+  await handleBranchPicker(ctx, clients, key)
 }
 
 export async function handleBranchPicker(ctx: Context, clients: Clients, key: string): Promise<void> {
-  const git = clients.git!
+  const chatId = ctx.chat!.id
+  const git = pendingGits.get(`${chatId}:${key}`)
+
+  if (!git) {
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery()
+    await solveByKey(ctx, clients, key)
+    return
+  }
+
   let branch: string
   let clean: boolean
 
   try {
     ;[branch, clean] = await Promise.all([git.currentBranch(), git.isClean()])
   } catch {
-    // git unavailable — skip picker, solve directly
-    await ctx.answerCallbackQuery()
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery()
     await solveByKey(ctx, clients, key, { cwd: git.repoPath })
     return
   }
@@ -137,7 +203,7 @@ export async function handleBranchPicker(ctx: Context, clients: Clients, key: st
       },
     },
   )
-  await ctx.answerCallbackQuery()
+  if (ctx.callbackQuery) await ctx.answerCallbackQuery()
 }
 
 export async function handleBranchChoice(
@@ -146,7 +212,16 @@ export async function handleBranchChoice(
   key: string,
   choice: "new" | "curr",
 ): Promise<void> {
-  const git = clients.git!
+  const chatId = ctx.chat!.id
+  const git = pendingGits.get(`${chatId}:${key}`)
+  pendingGits.delete(`${chatId}:${key}`)
+
+  if (!git) {
+    await ctx.answerCallbackQuery()
+    await solveByKey(ctx, clients, key)
+    return
+  }
+
   const cwd = git.repoPath
 
   if (choice === "new") {
@@ -155,7 +230,6 @@ export async function handleBranchChoice(
       `⏳ Checking out <code>${escHtml(branch)}</code>...`,
       { parse_mode: "HTML" },
     )
-    const chatId = ctx.chat!.id
     const msgId = statusMsg.message_id
 
     try {
@@ -187,8 +261,8 @@ export async function handleSolve(ctx: Context, clients: Clients): Promise<void>
     await ctx.reply("Usage: /solve <ticket-key>")
     return
   }
-  if (clients.git) {
-    await handleBranchPicker(ctx, clients, key)
+  if (clients.gitMap) {
+    await handleRepoPicker(ctx, clients, key)
     return
   }
   await solveByKey(ctx, clients, key)

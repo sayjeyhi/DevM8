@@ -22,12 +22,17 @@ export const AppConfigSchema = z.object({
     binary_path: z.string().min(1),
     api_key: z.string().min(1).optional(),
   }),
-  repo: z.object({
-    path: z.string().min(1),
-  }).optional(),
+  repos: z.record(
+    z.string().regex(PROJECT_KEY_REGEX),
+    z.array(z.string().min(1)).min(1),
+  ).optional(),
   app: z.object({
     log_level: z.enum(["info", "debug", "error"]).default("info"),
   }).optional().default({ log_level: "info" }),
+  slack: z.object({
+    user_token: z.string().regex(/^xoxp-/, { message: "Must be a Slack User OAuth Token (xoxp-...)" }),
+    poll_interval_ms: z.number().int().positive().default(30000),
+  }).optional(),
 })
 
 export type AppConfig = z.infer<typeof AppConfigSchema>

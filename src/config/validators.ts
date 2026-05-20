@@ -43,7 +43,10 @@ export function validateBinaryPath(v: string): string | undefined {
   return v && existsSync(v) ? undefined : "File not found at this path"
 }
 
-export function validateRepoPath(v: string): string | undefined {
+export function validateRepoPaths(v: string): string | undefined {
   if (!v || v.trim() === "") return undefined
-  if (!existsSync(v)) return "Directory not found at this path"
+  const paths = v.split(",").map(s => s.trim()).filter(Boolean)
+  for (const p of paths) {
+    if (!existsSync(p)) return `Directory not found: ${p}`
+  }
 }

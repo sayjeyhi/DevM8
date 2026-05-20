@@ -60,22 +60,33 @@ No runtime is required — the binary is self-contained (compiled with `bun --co
 
 ## Config File
 
-**Location:** `~/.config/devm8/config.json`
+**Location:** `~/.config/devm8/config.toml`
 
 The install script runs a configuration wizard on first install. For non-interactive environments (piped `curl | bash`), the wizard is skipped and you are prompted to run `devm8 config` to complete setup.
 
-```json
-{
-  "telegram": {
-    "botToken": "YOUR_TELEGRAM_BOT_TOKEN"
-  },
-  "jira": {
-    "baseUrl": "https://yourcompany.atlassian.net",
-    "email": "you@example.com",
-    "apiToken": "YOUR_JIRA_API_TOKEN",
-    "projectKey": "PROJ"
-  }
-}
+```toml
+[telegram]
+bot_token = "YOUR_TELEGRAM_BOT_TOKEN"
+allowed_user_ids = [123456789]
+
+[jira]
+base_url = "https://yourcompany.atlassian.net"
+email = "you@example.com"
+api_token = "YOUR_JIRA_API_TOKEN"
+project_keys = ["PROJ", "BZ"]
+
+[claude]
+binary_path = "/usr/local/bin/claude"
+# api_key = "sk-ant-..."   # optional if already logged in via `claude login`
+
+# Per-project repo paths for /solve — omit a project to disable solve for it.
+# Each project can have multiple repos (comma-separated in the wizard).
+[repos]
+PROJ = ["/home/you/code/myrepo"]
+BZ   = ["/home/you/code/blaze", "/home/you/code/blaze-infra"]
+
+[app]
+log_level = "info"  # info | debug | error
 ```
 
 The config file is created with `chmod 600` (user-read-only) by the configuration wizard.

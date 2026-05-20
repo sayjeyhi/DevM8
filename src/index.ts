@@ -35,7 +35,8 @@ const main = defineCommand({
     config: () => import("./commands/config").then(m => m.default),
     update: () => import("./commands/update").then(m => m.default),
     logs:   () => import("./commands/logs").then(m => m.default),
-    daemon: () => import("./commands/daemon").then(m => m.default),
+    daemon:   () => import("./commands/daemon").then(m => m.default),
+    slackmap: () => import("./commands/slackmap").then(m => m.default),
   },
 })
 

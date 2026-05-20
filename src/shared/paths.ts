@@ -10,6 +10,7 @@ export const PATHS = {
   configDir,
   configFile:      join(configDir, "config.toml"),
   restartsFile:    join(configDir, "restarts.json"),
+  slackStateFile:  join(configDir, "slack-state.json"),
   logsDir,
   logFile:         join(logsDir, "app.log"),
   pidFile:         join(configDir, "daemon.pid"),
