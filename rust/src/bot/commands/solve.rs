@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
@@ -25,12 +26,6 @@ Please provide:
 
 Be specific, technical, and actionable. Format your response clearly.";
 
-// ---------------------------------------------------------------------------
-// Core solve logic
-// ---------------------------------------------------------------------------
-
-/// Fetch issue, ask Claude, stream progress into an editable message,
-/// then post the full solution as chunked messages.
 pub async fn solve_by_key(
     bot: Bot,
     chat_id: ChatId,
@@ -38,7 +33,11 @@ pub async fn solve_by_key(
     issue_key: &str,
     cwd: Option<String>,
 ) -> Result<()> {
-    // Send an initial "working" message
+    state.logger.info(
+        "solve: fetching issue",
+        Some(&json!({ "key": issue_key, "cwd": cwd.as_deref().unwrap_or("(none)") })),
+    );
+
     let status_msg = bot
         .send_message(
             chat_id,
@@ -48,13 +47,15 @@ pub async fn solve_by_key(
         .await?;
 
     let status_msg_id = status_msg.id;
-
     let _typing = keep_typing(bot.clone(), chat_id);
 
-    // Fetch the issue
     let issue = match state.jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
+            state.logger.error(
+                &format!("solve: failed to fetch issue: {e}"),
+                Some(&json!({ "key": issue_key })),
+            );
             bot.edit_message_text(
                 chat_id,
                 status_msg_id,
@@ -66,13 +67,17 @@ pub async fn solve_by_key(
         }
     };
 
+    state.logger.info(
+        "solve: issue fetched, asking Claude",
+        Some(&json!({ "key": &issue.key, "status": &issue.status })),
+    );
+
     let prompt = SOLVE_PROMPT_TEMPLATE
         .replace("{key}", &issue.key)
         .replace("{summary}", &issue.summary)
         .replace("{status}", &issue.status)
         .replace("{description}", &issue.description);
 
-    // Progress closure — edit message with partial output
     let bot_progress = bot.clone();
     let chat_id_progress = chat_id;
     let msg_id_progress = status_msg_id;
@@ -110,52 +115,57 @@ pub async fn solve_by_key(
     let analysis = match state.claude.ask(&prompt, opts).await {
         Ok(text) => text,
         Err(e) => {
-            bot.edit_message_text(
-                chat_id,
-                status_msg_id,
-                format!("Claude error: {}", e),
-            )
-            .await?;
+            state.logger.error(
+                &format!("solve: Claude error: {e}"),
+                Some(&json!({ "key": issue_key })),
+            );
+            bot.edit_message_text(chat_id, status_msg_id, format!("Claude error: {}", e))
+                .await?;
             return Ok(());
         }
     };
 
-    // Final status edit
     bot.edit_message_text(
         chat_id,
         status_msg_id,
-        format!(
-            "Analysis complete for <b>{}</b>",
-            escape_html(issue_key)
-        ),
+        format!("Analysis complete for <b>{}</b>", escape_html(issue_key)),
     )
     .parse_mode(ParseMode::Html)
     .await?;
 
-    // Post solution in chunks
     let chunks = split_message(&analysis, 4096);
     for chunk in &chunks {
         bot.send_message(chat_id, chunk).await?;
     }
 
-    // Also add as a Jira comment
-    let _ = state.jira.add_comment(issue_key, &analysis).await;
+    state.logger.info(
+        "solve: posting analysis as Jira comment",
+        Some(&json!({ "key": issue_key })),
+    );
+    match state.jira.add_comment(issue_key, &analysis).await {
+        Ok(()) => {
+            state.logger.info(
+                "solve: comment posted",
+                Some(&json!({ "key": issue_key })),
+            );
+        }
+        Err(e) => {
+            state.logger.warn(
+                &format!("solve: failed to post comment: {e}"),
+                Some(&json!({ "key": issue_key })),
+            );
+        }
+    }
 
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Repo picker
-// ---------------------------------------------------------------------------
-
-/// Show inline keyboard for repo selection (when multiple repos exist for the project key).
 pub async fn handle_repo_picker(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
     issue_key: &str,
 ) -> Result<()> {
-    // Determine project key from issue key (e.g., "PROJ-123" -> "PROJ")
     let project_key = issue_key
         .split('-')
         .next()
@@ -165,12 +175,18 @@ pub async fn handle_repo_picker(
     let repos = state.git_map.get(&project_key).cloned().unwrap_or_default();
 
     if repos.is_empty() {
-        // No git context — solve directly
+        state.logger.info(
+            "solve: no repos configured, solving without git context",
+            Some(&json!({ "key": issue_key })),
+        );
         return solve_by_key(bot, chat_id, state, issue_key, None).await;
     }
 
     if repos.len() == 1 {
-        // Only one repo — go straight to branch picker
+        state.logger.info(
+            "solve: single repo, proceeding to branch picker",
+            Some(&json!({ "key": issue_key, "repo": repos[0].repo_path.display().to_string() })),
+        );
         if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
             cs.pending_solve = Some(PendingSolve {
                 issue_key: issue_key.to_string(),
@@ -187,7 +203,11 @@ pub async fn handle_repo_picker(
         return handle_branch_picker(bot, chat_id, state).await;
     }
 
-    // Multiple repos — show picker
+    state.logger.info(
+        "solve: multiple repos, showing picker",
+        Some(&json!({ "key": issue_key, "repo_count": repos.len() })),
+    );
+
     let buttons: Vec<Vec<InlineKeyboardButton>> = repos
         .iter()
         .enumerate()
@@ -220,11 +240,6 @@ pub async fn handle_repo_picker(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Branch picker
-// ---------------------------------------------------------------------------
-
-/// Show inline keyboard: stash+new branch, new branch (keep work), or stay on current.
 pub async fn handle_branch_picker(
     bot: Bot,
     chat_id: ChatId,
@@ -246,12 +261,24 @@ pub async fn handle_branch_picker(
     };
 
     let (current_branch, is_clean) = if let Some(ref g) = git {
-        let branch = g.current_branch().await.unwrap_or_else(|_| "unknown".to_string());
+        let branch = g
+            .current_branch()
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
         let clean = g.is_clean().await.unwrap_or(false);
         (branch, clean)
     } else {
         ("(none)".to_string(), true)
     };
+
+    state.logger.info(
+        "solve: branch picker",
+        Some(&json!({
+            "key": &issue_key,
+            "branch": &current_branch,
+            "clean": is_clean,
+        })),
+    );
 
     let clean_label = if is_clean { "" } else { " (dirty)" };
     let text = format!(
@@ -262,7 +289,7 @@ pub async fn handle_branch_picker(
 
     let mut buttons: Vec<Vec<InlineKeyboardButton>> = vec![
         vec![InlineKeyboardButton::callback(
-            format!("New branch (from main)"),
+            "New branch (from main)".to_string(),
             format!("solve:branch:new:{}", issue_key),
         )],
         vec![InlineKeyboardButton::callback(
@@ -290,11 +317,6 @@ pub async fn handle_branch_picker(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Branch choice handler (callback)
-// ---------------------------------------------------------------------------
-
-/// Called when user picks "new", "curr", or "stash" from the branch picker.
 pub async fn handle_branch_choice(
     bot: Bot,
     chat_id: ChatId,
@@ -315,16 +337,44 @@ pub async fn handle_branch_choice(
         .as_ref()
         .map(|g| g.repo_path.to_string_lossy().to_string());
 
+    state.logger.info(
+        "solve: branch choice",
+        Some(&json!({ "key": issue_key, "choice": choice })),
+    );
+
     if let Some(ref g) = git {
         match choice {
             "stash" => {
-                if let Err(e) = g.stash(Some(&format!("devm8: before solving {}", issue_key))).await {
-                    bot.send_message(chat_id, format!("Failed to stash: {e}")).await?;
+                state.logger.info(
+                    "solve: stashing changes",
+                    Some(&json!({ "key": issue_key })),
+                );
+                if let Err(e) = g
+                    .stash(Some(&format!("devm8: before solving {}", issue_key)))
+                    .await
+                {
+                    state.logger.error(
+                        &format!("solve: stash failed: {e}"),
+                        Some(&json!({ "key": issue_key })),
+                    );
+                    bot.send_message(chat_id, format!("Failed to stash: {e}"))
+                        .await?;
                     return Ok(());
                 }
-                // Create new branch after stash
-                let branch_name = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
-                if let Err(e) = g.checkout_new_branch_from_main(&branch_name, "origin", "main").await {
+                let branch_name =
+                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                state.logger.info(
+                    "solve: creating branch",
+                    Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                );
+                if let Err(e) = g
+                    .checkout_new_branch_from_main(&branch_name, "origin", "main")
+                    .await
+                {
+                    state.logger.error(
+                        &format!("solve: branch creation failed after stash: {e}"),
+                        Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                    );
                     bot.send_message(
                         chat_id,
                         format!("Stashed, but failed to create branch: {e}"),
@@ -332,19 +382,43 @@ pub async fn handle_branch_choice(
                     .await?;
                     return Ok(());
                 }
+                state.logger.info(
+                    "solve: stashed and created branch",
+                    Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                );
                 bot.send_message(
                     chat_id,
-                    format!("Changes stashed. Created branch <b>{}</b>.", escape_html(&branch_name)),
+                    format!(
+                        "Changes stashed. Created branch <b>{}</b>.",
+                        escape_html(&branch_name)
+                    ),
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
             }
             "new" => {
-                let branch_name = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
-                if let Err(e) = g.checkout_new_branch_from_main(&branch_name, "origin", "main").await {
-                    bot.send_message(chat_id, format!("Failed to create branch: {e}")).await?;
+                let branch_name =
+                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                state.logger.info(
+                    "solve: creating new branch",
+                    Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                );
+                if let Err(e) = g
+                    .checkout_new_branch_from_main(&branch_name, "origin", "main")
+                    .await
+                {
+                    state.logger.error(
+                        &format!("solve: branch creation failed: {e}"),
+                        Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                    );
+                    bot.send_message(chat_id, format!("Failed to create branch: {e}"))
+                        .await?;
                     return Ok(());
                 }
+                state.logger.info(
+                    "solve: branch created",
+                    Some(&json!({ "key": issue_key, "branch": &branch_name })),
+                );
                 bot.send_message(
                     chat_id,
                     format!("Created branch <b>{}</b>.", escape_html(&branch_name)),
@@ -353,22 +427,20 @@ pub async fn handle_branch_choice(
                 .await?;
             }
             "curr" | _ => {
-                // Stay on current branch — do nothing
+                state.logger.info(
+                    "solve: staying on current branch",
+                    Some(&json!({ "key": issue_key })),
+                );
             }
         }
     }
 
-    // Clear pending solve
     if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
         cs.pending_solve = None;
     }
 
     solve_by_key(bot, chat_id, state, issue_key, cwd).await
 }
-
-// ---------------------------------------------------------------------------
-// Main command handler
-// ---------------------------------------------------------------------------
 
 pub async fn handle_solve(
     bot: Bot,
@@ -378,12 +450,9 @@ pub async fn handle_solve(
 ) -> Result<()> {
     let issue_key = args.trim().to_string();
     if issue_key.is_empty() {
-        bot.send_message(
-            msg.chat.id,
-            "Usage: /solve &lt;issue-key&gt;",
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
+        bot.send_message(msg.chat.id, "Usage: /solve &lt;issue-key&gt;")
+            .parse_mode(ParseMode::Html)
+            .await?;
         return Ok(());
     }
 
@@ -395,16 +464,17 @@ pub async fn handle_solve(
 
     let has_repos = state.git_map.contains_key(&project_key);
 
+    state.logger.info(
+        "solve: command received",
+        Some(&json!({ "key": &issue_key, "has_repos": has_repos })),
+    );
+
     if has_repos {
         handle_repo_picker(bot, msg.chat.id, state, &issue_key).await
     } else {
         solve_by_key(bot, msg.chat.id, state, &issue_key, None).await
     }
 }
-
-// ---------------------------------------------------------------------------
-// Callback: solve:repo:<key>:<index>
-// ---------------------------------------------------------------------------
 
 pub async fn handle_solve_repo_callback(
     bot: Bot,
@@ -414,7 +484,6 @@ pub async fn handle_solve_repo_callback(
     let _ = bot.answer_callback_query(q.id.clone()).await;
 
     let data = q.data.as_deref().unwrap_or("");
-    // format: solve:repo:<issue_key>:<repo_index>
     let parts: Vec<&str> = data.splitn(4, ':').collect();
     if parts.len() < 4 {
         return Ok(());
@@ -436,7 +505,11 @@ pub async fn handle_solve_repo_callback(
     let repos = state.git_map.get(&project_key).cloned().unwrap_or_default();
     let git = repos.get(repo_idx).cloned();
 
-    // Store pending solve with chosen git
+    state.logger.info(
+        "solve: repo selected",
+        Some(&json!({ "key": issue_key, "repo_idx": repo_idx })),
+    );
+
     {
         let mut entry = state.chat_states.entry(chat_id.0).or_default();
         entry.pending_solve = Some(PendingSolve {

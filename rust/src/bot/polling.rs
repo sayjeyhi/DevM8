@@ -61,9 +61,15 @@ pub async fn start_polling(
 ) -> anyhow::Result<()> {
     use teloxide::utils::command::BotCommands as _;
 
-    let state = Arc::new(AppState::new(config.clone(), Arc::clone(logger))?);
-
     let bot = Bot::new(&config.telegram.bot_token);
+
+    let bot_username = bot
+        .get_me()
+        .await
+        .map(|me| me.username().to_string())
+        .unwrap_or_default();
+
+    let state = Arc::new(AppState::new(config.clone(), Arc::clone(logger), bot_username)?);
 
     logger.info(
         "telegram bot starting",
@@ -186,9 +192,30 @@ async fn dispatch_command(
     state: Arc<AppState>,
     allowed_ids: Arc<HashSet<i64>>,
 ) -> anyhow::Result<()> {
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
     if !is_authorized(&msg, &allowed_ids) {
+        state.logger.warn(
+            "unauthorized command attempt",
+            Some(&serde_json::json!({ "user_id": user_id, "chat_id": msg.chat.id.0 })),
+        );
         return Ok(());
     }
+
+    let cmd_name = match &cmd {
+        BotCommand::Help => "help",
+        BotCommand::Start(_) => "start",
+        BotCommand::Create(_) => "create",
+        BotCommand::Move(_) => "move",
+        BotCommand::Comment(_) => "comment",
+        BotCommand::Solve(_) => "solve",
+        BotCommand::MyTickets => "my_tickets",
+        BotCommand::Ask(_) => "ask",
+        BotCommand::Logs(_) => "logs",
+    };
+    state.logger.info(
+        "command received",
+        Some(&serde_json::json!({ "cmd": cmd_name, "user_id": user_id, "chat_id": msg.chat.id.0 })),
+    );
 
     match cmd {
         BotCommand::Help => handle_help(bot, msg, state).await,
@@ -227,11 +254,19 @@ async fn dispatch_callback(
 ) -> anyhow::Result<()> {
     let user_id = query.from.id.0 as i64;
     if !is_authorized_id(user_id, &allowed_ids) {
+        state.logger.warn(
+            "unauthorized callback attempt",
+            Some(&serde_json::json!({ "user_id": user_id })),
+        );
         let _ = bot.answer_callback_query(query.id.clone()).await;
         return Ok(());
     }
 
     let data = query.data.as_deref().unwrap_or("");
+    state.logger.debug(
+        "callback received",
+        Some(&serde_json::json!({ "data": data, "user_id": user_id })),
+    );
 
     if data.starts_with("tickets:") {
         return handle_my_tickets_callback(bot, query, state).await;

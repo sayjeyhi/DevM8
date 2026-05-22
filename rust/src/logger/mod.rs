@@ -3,7 +3,7 @@ pub mod rotate;
 use std::fs;
 use std::io::Write as IoWrite;
 use std::path::Path;
-use chrono::Utc;
+use chrono::Local;
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ impl FileLogger {
             return;
         }
 
-        let ts = Utc::now().to_rfc3339();
+        let ts = Local::now().to_rfc3339();
 
         // Build the JSON line (used for file output and json-mode stdout)
         let json_line = if let Some(m) = meta {
@@ -189,7 +189,7 @@ pub fn append_to_log_file(log_file_path: impl AsRef<Path>, level: Level, msg: &s
         let _ = fs::create_dir_all(dir);
     }
 
-    let ts = Utc::now().to_rfc3339();
+    let ts = Local::now().to_rfc3339();
     let json_line = if let Some(m) = meta {
         let mut obj = json!({ "level": level.as_str(), "ts": ts, "msg": msg });
         if let Some(map) = m.as_object() {

@@ -33,6 +33,8 @@ pub struct AskSession {
     pub history: Vec<HistoryEntry>,
     /// Whether the branch has been pushed (enables "Open PR" button)
     pub pushed: bool,
+    /// Optional system context prepended to every Claude prompt (e.g. ticket details)
+    pub context: Option<String>,
 }
 
 impl AskSession {
@@ -42,7 +44,13 @@ impl AskSession {
             git,
             history: Vec::new(),
             pushed: false,
+            context: None,
         }
+    }
+
+    pub fn with_context(mut self, context: String) -> Self {
+        self.context = Some(context);
+        self
     }
 }
 

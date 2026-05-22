@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
-use crate::bot::state::PageCache;
+use crate::bot::state::{AskSession, PageCache};
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
 use crate::jira::types::JiraIssue;
@@ -29,19 +30,29 @@ fn status_emoji(status: &str) -> &'static str {
 // Formatters
 // ---------------------------------------------------------------------------
 
-fn format_tickets_page(issues: &[JiraIssue]) -> String {
+fn format_tickets_page(issues: &[JiraIssue], bot_username: &str) -> String {
     if issues.is_empty() {
         return "No tickets found.".to_string();
     }
     issues
         .iter()
         .map(|i| {
+            let details_link = if bot_username.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "  <a href=\"https://t.me/{}?start={}\">[details]</a>",
+                    bot_username,
+                    i.key,
+                )
+            };
             format!(
-                "{} <a href=\"{}\">{}</a> — {}\n  <i>{}</i>",
+                "{} <a href=\"{}\">{}</a> — {}{}\n  <i>{}</i>",
                 status_emoji(&i.status),
                 i.url,
                 escape_html(&i.key),
                 escape_html(&i.summary),
+                details_link,
                 escape_html(&i.status),
             )
         })
@@ -49,17 +60,7 @@ fn format_tickets_page(issues: &[JiraIssue]) -> String {
         .join("\n\n")
 }
 
-fn build_list_keyboard(issues: &[JiraIssue], page: usize, has_next: bool) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = issues
-        .iter()
-        .map(|i| {
-            let summary_short: String = i.summary.chars().take(32).collect();
-            let ellipsis = if i.summary.len() > 32 { "…" } else { "" };
-            let label = format!("{} {} — {}{}", status_emoji(&i.status), i.key, summary_short, ellipsis);
-            vec![InlineKeyboardButton::callback(label, format!("tickets:details:{}", i.key))]
-        })
-        .collect();
-
+fn build_list_keyboard(page: usize, has_next: bool) -> InlineKeyboardMarkup {
     let mut nav_row: Vec<InlineKeyboardButton> = Vec::new();
     if page > 0 {
         nav_row.push(InlineKeyboardButton::callback("\u{2190} Prev", format!("tickets:page:{}", page - 1)));
@@ -68,15 +69,16 @@ fn build_list_keyboard(issues: &[JiraIssue], page: usize, has_next: bool) -> Inl
     if has_next {
         nav_row.push(InlineKeyboardButton::callback("Next \u{2192}", format!("tickets:page:{}", page + 1)));
     }
-    rows.push(nav_row);
-
-    InlineKeyboardMarkup::new(rows)
+    InlineKeyboardMarkup::new(vec![nav_row])
 }
 
 fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
+            InlineKeyboardButton::callback("Ask", format!("tickets:ask:{}", issue_key)),
             InlineKeyboardButton::callback("Solve", format!("tickets:solve:{}", issue_key)),
+        ],
+        vec![
             InlineKeyboardButton::callback("Move", format!("tickets:move_start:{}", issue_key)),
             InlineKeyboardButton::callback("Comment", format!("tickets:comment_start:{}", issue_key)),
         ],
@@ -131,9 +133,17 @@ pub async fn handle_my_tickets_project(
     state: Arc<AppState>,
     project_key: &str,
 ) -> Result<()> {
+    state.logger.info(
+        "tickets: fetching statuses",
+        Some(&json!({ "project": project_key })),
+    );
     let statuses = match state.jira.get_statuses().await {
         Ok(s) => s,
         Err(e) => {
+            state.logger.error(
+                &format!("tickets: failed to fetch statuses: {e}"),
+                Some(&json!({ "project": project_key })),
+            );
             bot.send_message(chat_id, format!("Error fetching statuses: {e}")).await?;
             return Ok(());
         }
@@ -171,12 +181,17 @@ pub async fn handle_my_tickets_status(
     project_key: &str,
     status_filter: &str,
 ) -> Result<()> {
+    let bot_username = state.bot_username.clone();
     let filter = if status_filter == "ALL" {
         None
     } else {
         Some(status_filter)
     };
 
+    state.logger.info(
+        "tickets: querying issues",
+        Some(&json!({ "project": project_key, "status": status_filter })),
+    );
     let result = match state
         .jira
         .get_my_issues(PAGE_SIZE, None, filter, Some(project_key))
@@ -184,10 +199,18 @@ pub async fn handle_my_tickets_status(
     {
         Ok(r) => r,
         Err(e) => {
+            state.logger.error(
+                &format!("tickets: query failed: {e}"),
+                Some(&json!({ "project": project_key })),
+            );
             bot.send_message(chat_id, format!("Error: {e}")).await?;
             return Ok(());
         }
     };
+    state.logger.info(
+        "tickets: query complete",
+        Some(&json!({ "project": project_key, "count": result.issues.len(), "has_next": result.next_page_token.is_some() })),
+    );
 
     // Initialize page cache
     let mut cache = PageCache::new(project_key, filter.map(String::from));
@@ -202,8 +225,8 @@ pub async fn handle_my_tickets_status(
     }
 
     let has_next = result.next_page_token.is_some();
-    let text = format_tickets_page(&result.issues);
-    let keyboard = build_list_keyboard(&result.issues, 0, has_next);
+    let text = format_tickets_page(&result.issues, &bot_username);
+    let keyboard = build_list_keyboard(0, has_next);
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
@@ -279,8 +302,8 @@ pub async fn handle_my_tickets_page(
     }
 
     let has_next = result.next_page_token.is_some();
-    let text = format_tickets_page(&result.issues);
-    let keyboard = build_list_keyboard(&result.issues, target_page, has_next);
+    let text = format_tickets_page(&result.issues, &state.bot_username);
+    let keyboard = build_list_keyboard(target_page, has_next);
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
@@ -306,9 +329,17 @@ pub async fn handle_ticket_details(
         .and_then(|cs| cs.page_cache.as_ref().map(|c| c.current_page))
         .unwrap_or(0);
 
+    state.logger.info(
+        "tickets: fetching issue details",
+        Some(&json!({ "key": issue_key })),
+    );
     let issue = match state.jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
+            state.logger.error(
+                &format!("tickets: failed to fetch issue: {e}"),
+                Some(&json!({ "key": issue_key })),
+            );
             bot.send_message(chat_id, format!("Error: {e}")).await?;
             return Ok(());
         }
@@ -392,16 +423,32 @@ pub async fn handle_move_execute(
     issue_key: &str,
     status: &str,
 ) -> Result<()> {
+    state.logger.info(
+        "tickets: transitioning issue",
+        Some(&json!({ "key": issue_key, "target_status": status })),
+    );
     match state.jira.transition_issue(issue_key, status).await {
         Ok(()) => {
+            state.logger.info(
+                "tickets: transition complete",
+                Some(&json!({ "key": issue_key, "status": status })),
+            );
             bot.send_message(
                 chat_id,
-                format!("Moved <b>{}</b> \u{2192} {}", escape_html(issue_key), escape_html(status)),
+                format!(
+                    "Moved <b>{}</b> \u{2192} {}",
+                    escape_html(issue_key),
+                    escape_html(status)
+                ),
             )
             .parse_mode(ParseMode::Html)
             .await?;
         }
         Err(e) => {
+            state.logger.error(
+                &format!("tickets: transition failed: {e}"),
+                Some(&json!({ "key": issue_key, "target_status": status })),
+            );
             bot.send_message(chat_id, format!("Error: {e}")).await?;
         }
     }
@@ -429,6 +476,156 @@ pub async fn handle_comment_start(
         format!("Type a comment for <b>{}</b>:", escape_html(issue_key)),
     )
     .parse_mode(ParseMode::Html)
+    .await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Ask: start an ask session with ticket context
+// ---------------------------------------------------------------------------
+
+pub async fn handle_ticket_ask(
+    bot: Bot,
+    chat_id: ChatId,
+    state: Arc<AppState>,
+    issue_key: &str,
+) -> Result<()> {
+    state.logger.info(
+        "tickets: starting ask session for ticket",
+        Some(&json!({ "key": issue_key })),
+    );
+
+    let issue = match state.jira.get_issue_by_key(issue_key).await {
+        Ok(i) => i,
+        Err(e) => {
+            state.logger.error(
+                &format!("tickets: ask — failed to fetch issue: {e}"),
+                Some(&json!({ "key": issue_key })),
+            );
+            bot.send_message(chat_id, format!("Error fetching ticket: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let project_key = issue_key
+        .split('-')
+        .next()
+        .unwrap_or("")
+        .to_uppercase();
+
+    // Build context string that Claude will receive with every message
+    let context = format!(
+        "You are helping with Jira ticket {key}: \"{summary}\".\nStatus: {status}\n\nDescription:\n{description}",
+        key = issue.key,
+        summary = issue.summary,
+        status = issue.status,
+        description = if issue.description.is_empty() { "(no description)".into() } else { issue.description.clone() },
+    );
+
+    // Find repos for this project
+    let repos = state.git_map.get(&project_key).cloned().unwrap_or_default();
+
+    if repos.is_empty() {
+        // No git context — start session directly
+        {
+            let mut entry = state.chat_states.entry(chat_id.0).or_default();
+            entry.ask_session = Some(AskSession::new(None, None).with_context(context));
+        }
+        bot.send_message(
+            chat_id,
+            format!(
+                "📋 <b><a href=\"{}\">{}</a></b> — {}\nStatus: {}\n\nWhat would you like to ask?",
+                issue.url,
+                escape_html(&issue.key),
+                escape_html(&issue.summary),
+                escape_html(&issue.status),
+            ),
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    if repos.len() == 1 {
+        let git = repos.into_iter().next().unwrap();
+        let branch = git.current_branch().await.unwrap_or_else(|_| "unknown".into());
+        let clean = git.is_clean().await.unwrap_or(true);
+
+        {
+            let mut entry = state.chat_states.entry(chat_id.0).or_default();
+            entry.ask_session = Some(
+                AskSession::new(Some(git.repo_path.clone()), Some(git.clone()))
+                    .with_context(context),
+            );
+        }
+
+        let repo_name = git
+            .repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("repo");
+
+        bot.send_message(
+            chat_id,
+            format!(
+                "📋 <b><a href=\"{}\">{}</a></b> — {}\nStatus: {}\n\n📂 <b>{}</b> | Branch: <code>{}</code>{}\n\nWhat would you like to ask?",
+                issue.url,
+                escape_html(&issue.key),
+                escape_html(&issue.summary),
+                escape_html(&issue.status),
+                escape_html(repo_name),
+                escape_html(&branch),
+                if clean { "" } else { " ⚠️ dirty" },
+            ),
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    // Multiple repos — show picker, preserving context in pending ask
+    use crate::bot::state::PendingAsk;
+    {
+        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        // Store context temporarily; session will be created after repo selection
+        entry.ask_session = Some(AskSession::new(None, None).with_context(context));
+        entry.pending_ask = Some(PendingAsk {
+            repo_path: None,
+            git: None,
+            inline_question: None,
+            mode: None,
+        });
+    }
+
+    let buttons: Vec<Vec<InlineKeyboardButton>> = repos
+        .iter()
+        .enumerate()
+        .map(|(i, git)| {
+            let label = format!(
+                "{} / {}",
+                project_key,
+                git.repo_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repo")
+            );
+            vec![InlineKeyboardButton::callback(label, format!("ask:repo:{}", i))]
+        })
+        .collect();
+
+    bot.send_message(
+        chat_id,
+        format!(
+            "📋 <b><a href=\"{}\">{}</a></b> — {}\n\nSelect a repository:",
+            issue.url,
+            escape_html(&issue.key),
+            escape_html(&issue.summary),
+        ),
+    )
+    .parse_mode(ParseMode::Html)
+    .reply_markup(InlineKeyboardMarkup::new(buttons))
     .await?;
 
     Ok(())
@@ -492,12 +689,14 @@ pub async fn handle_my_tickets_callback(
         return handle_ticket_details(bot, chat_id, state, key).await;
     }
 
+    // tickets:ask:<issue_key>
+    if let Some(key) = data.strip_prefix("tickets:ask:") {
+        return handle_ticket_ask(bot, chat_id, state, key).await;
+    }
+
     // tickets:solve:<issue_key>
     if let Some(key) = data.strip_prefix("tickets:solve:") {
-        return crate::bot::commands::solve::solve_by_key(
-            bot, chat_id, state, key, None,
-        )
-        .await;
+        return crate::bot::commands::solve::handle_repo_picker(bot, chat_id, state, key).await;
     }
 
     // tickets:move_start:<issue_key>

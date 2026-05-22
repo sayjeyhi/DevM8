@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
@@ -13,9 +14,13 @@ use crate::claude::types::AskOptions;
 // Prompt builder
 // ---------------------------------------------------------------------------
 
-fn build_prompt(question: &str, history: &[HistoryEntry]) -> String {
+fn build_prompt(question: &str, history: &[HistoryEntry], context: Option<&str>) -> String {
+    let context_prefix = context
+        .map(|c| format!("{}\n\n---\n\n", c))
+        .unwrap_or_default();
+
     if history.is_empty() {
-        return question.to_string();
+        return format!("{}{}", context_prefix, question);
     }
     let turns = history
         .iter()
@@ -26,8 +31,8 @@ fn build_prompt(question: &str, history: &[HistoryEntry]) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(
-        "This is a continuing conversation. Previous exchanges:\n\n{}\n\nUser: {}",
-        turns, question
+        "{}This is a continuing conversation. Previous exchanges:\n\n{}\n\nUser: {}",
+        context_prefix, turns, question
     )
 }
 
@@ -106,24 +111,31 @@ pub async fn ask_with_session(
     state: Arc<AppState>,
     question: String,
 ) -> Result<()> {
-    let (history, repo_path_opt, git_opt) = {
+    let (history, repo_path_opt, git_opt, context) = {
         let cs = state.chat_states.get(&chat_id.0);
         if let Some(ref cs) = cs {
             let session = cs.ask_session.as_ref();
             let history = session.map(|s| s.history.clone()).unwrap_or_default();
             let repo = session.and_then(|s| s.repo_path.clone());
             let git = session.and_then(|s| s.git.clone());
-            (history, repo, git)
+            let ctx = session.and_then(|s| s.context.clone());
+            (history, repo, git, ctx)
         } else {
-            (vec![], None, None)
+            (vec![], None, None, None)
         }
     };
 
-    let prompt = build_prompt(&question, &history);
+    let prompt = build_prompt(&question, &history, context.as_deref());
 
-    let status_msg = bot
-        .send_message(chat_id, "Thinking...")
-        .await?;
+    state.logger.info(
+        "ask: invoking Claude",
+        Some(&json!({
+            "history_len": history.len(),
+            "cwd": repo_path_opt.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(none)".into()),
+        })),
+    );
+
+    let status_msg = bot.send_message(chat_id, "Thinking...").await?;
     let status_msg_id = status_msg.id;
 
     let _typing = keep_typing(bot.clone(), chat_id);
@@ -164,17 +176,28 @@ pub async fn ask_with_session(
     let answer = match state.claude.ask(&prompt, opts).await {
         Ok(a) => a,
         Err(e) => {
+            state.logger.error(
+                &format!("ask: Claude error: {e}"),
+                None,
+            );
             bot.edit_message_text(chat_id, status_msg_id, format!("Error: {e}"))
                 .await?;
             return Ok(());
         }
     };
 
+    state.logger.info(
+        "ask: Claude responded",
+        Some(&json!({ "response_len": answer.len() })),
+    );
+
     // Update session history
     let pushed = {
         let mut entry = state.chat_states.entry(chat_id.0).or_default();
         let session = entry.ask_session.get_or_insert_with(|| {
-            AskSession::new(repo_path_opt.clone(), git_opt.clone())
+            let mut s = AskSession::new(repo_path_opt.clone(), git_opt.clone());
+            s.context = context.clone();
+            s
         });
         session.history.push(HistoryEntry {
             role: Role::User,
@@ -353,7 +376,6 @@ pub async fn handle_ask_text_input(
 
     match pending.mode {
         Some(AskMode::Branch) => {
-            // Create a new git branch
             let git = pending.git.clone().or_else(|| {
                 state
                     .chat_states
@@ -362,8 +384,16 @@ pub async fn handle_ask_text_input(
             });
 
             if let Some(git) = git {
+                state.logger.info(
+                    "ask: creating branch",
+                    Some(&json!({ "branch": &text })),
+                );
                 match git.checkout_new_branch_from_main(&text, "origin", "main").await {
                     Ok(()) => {
+                        state.logger.info(
+                            "ask: branch created",
+                            Some(&json!({ "branch": &text })),
+                        );
                         bot.send_message(
                             msg.chat.id,
                             format!("Created and switched to branch <b>{}</b>", escape_html(&text)),
@@ -397,9 +427,17 @@ pub async fn handle_ask_text_input(
             });
 
             if let Some(git) = git {
+                state.logger.info(
+                    "ask: committing",
+                    Some(&json!({ "message": &text })),
+                );
                 let _ = git.stage_all().await;
                 match git.commit(&text).await {
                     Ok(()) => {
+                        state.logger.info(
+                            "ask: commit complete",
+                            Some(&json!({ "message": &text })),
+                        );
                         bot.send_message(
                             msg.chat.id,
                             format!("Committed with message: <b>{}</b>", escape_html(&text)),
@@ -408,6 +446,10 @@ pub async fn handle_ask_text_input(
                         .await?;
                     }
                     Err(e) => {
+                        state.logger.error(
+                            &format!("ask: commit failed: {e}"),
+                            None,
+                        );
                         bot.send_message(msg.chat.id, format!("Commit failed: {e}"))
                             .await?;
                     }
@@ -690,7 +732,11 @@ pub async fn handle_ask_session_callback(
                     diff
                 );
 
-                let suggestion = state.claude.ask(&prompt, AskOptions::default()).await.unwrap_or_default();
+                let commit_cwd = g.repo_path.to_string_lossy().to_string();
+                let suggestion = state.claude.ask(&prompt, AskOptions {
+                    cwd: Some(commit_cwd),
+                    ..AskOptions::default()
+                }).await.unwrap_or_default();
 
                 let repo_path = state
                     .chat_states
@@ -731,6 +777,7 @@ pub async fn handle_ask_session_callback(
                 .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
 
             if let Some(git) = git {
+                state.logger.info("ask: pushing to origin", None);
                 match git.push("origin").await {
                     Ok(()) => {
                         // Mark as pushed
@@ -744,6 +791,10 @@ pub async fn handle_ask_session_callback(
                         let branch = git.current_branch().await.unwrap_or_default();
                         let is_main = branch == "main" || branch == "master";
 
+                        state.logger.info(
+                            "ask: push complete",
+                            Some(&json!({ "branch": &branch })),
+                        );
                         let text = format!("Pushed branch <b>{}</b>.", escape_html(&branch));
                         if !is_main {
                             let keyboard = InlineKeyboardMarkup::new(vec![vec![
@@ -797,6 +848,7 @@ pub async fn handle_ask_session_callback(
         }
 
         "end" => {
+            state.logger.info("ask: session ended", None);
             {
                 let mut entry = state.chat_states.entry(chat_id.0).or_default();
                 entry.ask_session = None;

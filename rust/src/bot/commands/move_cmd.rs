@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 
@@ -28,8 +29,17 @@ pub async fn handle_move(
         }
     };
 
+    state.logger.info(
+        "move: transitioning issue",
+        Some(&json!({ "key": &key, "target_status": &status })),
+    );
+
     match state.jira.transition_issue(&key, &status).await {
         Ok(()) => {
+            state.logger.info(
+                "move: transition complete",
+                Some(&json!({ "key": &key, "status": &status })),
+            );
             bot.send_message(
                 msg.chat.id,
                 format!("Moved <b>{}</b> \u{2192} {}", key, status),
@@ -38,8 +48,11 @@ pub async fn handle_move(
             .await?;
         }
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("Error: {e}"))
-                .await?;
+            state.logger.error(
+                &format!("move: transition failed: {e}"),
+                Some(&json!({ "key": &key, "target_status": &status })),
+            );
+            bot.send_message(msg.chat.id, format!("Error: {e}")).await?;
         }
     }
 

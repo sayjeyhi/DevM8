@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 
@@ -28,25 +29,33 @@ pub async fn handle_comment(
         }
     };
 
+    state.logger.info(
+        "comment: adding comment",
+        Some(&json!({ "key": &key })),
+    );
+
     match state.jira.add_comment(&key, &text).await {
         Ok(()) => {
-            bot.send_message(
-                msg.chat.id,
-                format!("Comment added to <b>{}</b>", key),
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            state.logger.info(
+                "comment: comment added",
+                Some(&json!({ "key": &key })),
+            );
+            bot.send_message(msg.chat.id, format!("Comment added to <b>{}</b>", key))
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("Error: {e}"))
-                .await?;
+            state.logger.error(
+                &format!("comment: failed to add comment: {e}"),
+                Some(&json!({ "key": &key })),
+            );
+            bot.send_message(msg.chat.id, format!("Error: {e}")).await?;
         }
     }
 
     Ok(())
 }
 
-/// Handle a pending comment that the user typed in free-text mode.
 pub async fn handle_pending_comment(
     bot: Bot,
     msg: Message,
@@ -55,17 +64,26 @@ pub async fn handle_pending_comment(
 ) -> Result<()> {
     let text = msg.text().unwrap_or("").trim().to_string();
     if text.is_empty() {
-        bot.send_message(msg.chat.id, "Comment cannot be empty.").await?;
+        bot.send_message(msg.chat.id, "Comment cannot be empty.")
+            .await?;
         return Ok(());
     }
 
-    // Clear the pending state
     if let Some(mut chat_state) = state.chat_states.get_mut(&msg.chat.id.0) {
         chat_state.pending_comment = None;
     }
 
+    state.logger.info(
+        "comment: adding pending comment",
+        Some(&json!({ "key": &issue_key })),
+    );
+
     match state.jira.add_comment(&issue_key, &text).await {
         Ok(()) => {
+            state.logger.info(
+                "comment: pending comment added",
+                Some(&json!({ "key": &issue_key })),
+            );
             bot.send_message(
                 msg.chat.id,
                 format!("Comment added to <b>{}</b>", issue_key),
@@ -74,6 +92,10 @@ pub async fn handle_pending_comment(
             .await?;
         }
         Err(e) => {
+            state.logger.error(
+                &format!("comment: failed to add pending comment: {e}"),
+                Some(&json!({ "key": &issue_key })),
+            );
             bot.send_message(msg.chat.id, format!("Error adding comment: {e}"))
                 .await?;
         }

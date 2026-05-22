@@ -45,10 +45,13 @@ pub struct AppState {
 
     /// Optional Slack client.
     pub slack: Option<Arc<SlackClient>>,
+
+    /// Telegram bot username (e.g. "MyBot"), used to generate deep links.
+    pub bot_username: String,
 }
 
 impl AppState {
-    pub fn new(config: AppConfig, logger: Arc<dyn Logger>) -> anyhow::Result<Self> {
+    pub fn new(config: AppConfig, logger: Arc<dyn Logger>, bot_username: String) -> anyhow::Result<Self> {
         // Extract the host from the base_url (strip "https://" prefix and trailing slash).
         let host = config
             .jira
@@ -74,7 +77,7 @@ impl AppState {
             model: None,
         };
 
-        let claude = Arc::new(ClaudeClient::new(claude_cfg));
+        let claude = Arc::new(ClaudeClient::new(claude_cfg, Arc::clone(&logger)));
 
         // Build git_map from config.repos
         let mut git_map: HashMap<String, Vec<Arc<GitClient>>> = HashMap::new();
@@ -102,6 +105,7 @@ impl AppState {
             logger,
             git_map,
             slack,
+            bot_username,
         })
     }
 }

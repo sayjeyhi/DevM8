@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-use chrono::DateTime;
+use chrono::{DateTime, Local};
 use serde_json::Value;
 
 use crate::shared::errors::AppError;
@@ -46,7 +46,7 @@ fn colored_level(level: &str, color: bool) -> String {
 // ---------------------------------------------------------------------------
 
 fn parse_time_part(ts: &str) -> String {
-    ts.parse::<DateTime<chrono::Utc>>()
+    ts.parse::<DateTime<Local>>()
         .map(|dt| format!("{}", dt.format("%H:%M:%S")))
         .unwrap_or_else(|_| ts.to_string())
 }

@@ -1,13 +1,15 @@
 #![allow(dead_code)]
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tokio::process::Child;
+use tokio::process::Command;
 use tokio::time::{interval, timeout};
 
+use crate::logger::Logger;
 use crate::shared::errors::{AppError, ClaudeError};
 
 use super::types::{AskOptions, ClaudeClientConfig};
@@ -18,18 +20,14 @@ const SIGTERM_GRACE_MS: u64 = 2_000;
 
 pub struct ClaudeClient {
     config: ClaudeClientConfig,
+    logger: Arc<dyn Logger>,
 }
 
 impl ClaudeClient {
-    pub fn new(config: ClaudeClientConfig) -> Self {
-        Self { config }
+    pub fn new(config: ClaudeClientConfig, logger: Arc<dyn Logger>) -> Self {
+        Self { config, logger }
     }
 
-    /// Ask the Claude CLI a question and return the full response text.
-    ///
-    /// The subprocess is spawned with `--print --verbose --dangerously-skip-permissions
-    /// --output-format stream-json` (plus an optional `--model`).  The prompt is written
-    /// to stdin; stdout is parsed as newline-delimited JSON events.
     pub async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<String, AppError> {
         let timeout_ms = opts
             .timeout_ms
@@ -38,78 +36,104 @@ impl ClaudeClient {
 
         let model = opts.model.as_deref().or(self.config.model.as_deref());
 
-        // ----------------------------------------------------------------
-        // Build the command
-        // ----------------------------------------------------------------
+        self.logger.info(
+            "claude: invoking",
+            Some(&json!({
+                "model": model.unwrap_or("default"),
+                "cwd": opts.cwd.as_deref().unwrap_or("(none)"),
+                "timeout_ms": timeout_ms,
+                "prompt_len": prompt.len(),
+            })),
+        );
+
         let mut cmd = Command::new(&self.config.binary_path);
-        cmd.args(["--print", "--verbose", "--dangerously-skip-permissions",
-                  "--output-format", "stream-json"]);
+        cmd.args([
+            "--print",
+            "--verbose",
+            "--dangerously-skip-permissions",
+            "--output-format",
+            "stream-json",
+        ]);
 
         if let Some(m) = model {
             cmd.args(["--model", m]);
         }
 
-        // Pipe stdin/stdout/stderr
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        // Remove CLAUDECODE env var so we don't accidentally nest sessions.
         cmd.env_remove("CLAUDECODE");
 
         if let Some(ref cwd) = opts.cwd {
             cmd.current_dir(cwd);
         }
 
-        // ----------------------------------------------------------------
-        // Spawn
-        // ----------------------------------------------------------------
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| AppError::Other(anyhow::anyhow!("failed to spawn claude: {}", e)))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            self.logger
+                .error(&format!("claude: failed to spawn process: {e}"), None);
+            AppError::Other(anyhow::anyhow!("failed to spawn claude: {}", e))
+        })?;
 
-        // Write prompt to stdin then close it.
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(prompt.as_bytes())
                 .await
                 .map_err(|e| AppError::Other(e.into()))?;
-            // stdin is dropped here, closing the pipe.
         }
 
-        // ----------------------------------------------------------------
-        // Stream stdout + run progress timer, all within the global timeout
-        // ----------------------------------------------------------------
+        let started = Instant::now();
+
         let result = timeout(
             Duration::from_millis(timeout_ms),
             Self::stream_output(child, opts.on_progress),
         )
         .await;
 
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+
         match result {
             Ok(Ok((text, exit_code, stderr_text))) => {
                 if exit_code != 0 {
+                    self.logger.error(
+                        "claude: process exited with error",
+                        Some(&json!({
+                            "exit_code": exit_code,
+                            "elapsed_ms": elapsed_ms,
+                            "stderr": &stderr_text[..stderr_text.len().min(500)],
+                        })),
+                    );
                     Err(AppError::Claude(ClaudeError::Exit {
                         exit_code,
                         stderr: stderr_text,
                     }))
                 } else {
+                    self.logger.info(
+                        "claude: completed",
+                        Some(&json!({
+                            "elapsed_ms": elapsed_ms,
+                            "response_len": text.len(),
+                        })),
+                    );
                     Ok(text)
                 }
             }
-            Ok(Err(e)) => Err(e),
+            Ok(Err(e)) => {
+                self.logger.error(
+                    &format!("claude: stream error: {e}"),
+                    Some(&json!({ "elapsed_ms": elapsed_ms })),
+                );
+                Err(e)
+            }
             Err(_elapsed) => {
-                // timeout — process was already killed inside stream_output if
-                // we returned early, but timeout wraps the future so the child
-                // may still be running; nothing we can do without the handle.
+                self.logger.error(
+                    "claude: timed out",
+                    Some(&json!({ "timeout_ms": timeout_ms })),
+                );
                 Err(AppError::Claude(ClaudeError::Timeout { timeout_ms }))
             }
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Internal: stream stdout lines, parse events, drive progress callback.
-    // -----------------------------------------------------------------------
 
     async fn stream_output(
         mut child: Child,
@@ -124,11 +148,9 @@ impl ClaudeClient {
         let mut text_lines: Vec<String> = Vec::new();
         let mut result_text: Option<String> = None;
 
-        // Progress ticker
         let mut progress_ticker = interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
-        progress_ticker.tick().await; // consume the immediate first tick
+        progress_ticker.tick().await;
 
-        // Drain stderr concurrently using a separate task.
         let stderr_handle = tokio::spawn(async move {
             let mut collected = Vec::<String>::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
@@ -139,7 +161,6 @@ impl ClaudeClient {
 
         loop {
             tokio::select! {
-                // Next stdout line
                 line_result = lines_reader.next_line() => {
                     match line_result {
                         Ok(Some(line)) => {
@@ -147,17 +168,10 @@ impl ClaudeClient {
                                 Self::handle_event(&event, &mut text_lines, &mut result_text);
                             }
                         }
-                        Ok(None) => {
-                            // EOF — done reading stdout
-                            break;
-                        }
-                        Err(e) => {
-                            return Err(AppError::Other(e.into()));
-                        }
+                        Ok(None) => break,
+                        Err(e) => return Err(AppError::Other(e.into())),
                     }
                 }
-
-                // Progress callback tick
                 _ = progress_ticker.tick() => {
                     if let Some(ref cb) = on_progress {
                         cb(text_lines.clone()).await;
@@ -166,7 +180,6 @@ impl ClaudeClient {
             }
         }
 
-        // Wait for process to exit and collect exit code.
         let status = child
             .wait()
             .await
@@ -193,7 +206,6 @@ impl ClaudeClient {
 
         match event_type {
             "content_block_delta" => {
-                // {type: 'content_block_delta', delta: {type: 'text_delta', text: string}}
                 if let Some(text) = event
                     .get("delta")
                     .and_then(|d| d.get("text"))
@@ -203,7 +215,6 @@ impl ClaudeClient {
                 }
             }
             "assistant" => {
-                // {type: 'assistant', message: {content: [{type: 'text', text: string}]}}
                 if let Some(content) = event
                     .get("message")
                     .and_then(|m| m.get("content"))
@@ -219,7 +230,6 @@ impl ClaudeClient {
                 }
             }
             "result" => {
-                // {type: 'result', is_error: bool, result: string}
                 if let Some(r) = event.get("result").and_then(Value::as_str) {
                     *result_text = Some(r.to_string());
                 }
