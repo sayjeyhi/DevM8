@@ -1,6 +1,5 @@
-# Agent Rules & Conventions
-
-Rules for all agents and subagents working in this repository.
+This project MUST build and serve without any issue and error on linux and mac, Whatever features 
+you are adding make sure it will work in both Operation Systems.
 
 ---
 

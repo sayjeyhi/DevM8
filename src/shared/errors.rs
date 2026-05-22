@@ -57,9 +57,10 @@ impl ConfigMissingError {
 }
 
 // ---------------------------------------------------------------------------
-// launchctl errors (macOS only, but we define them for all platforms)
+// launchctl errors (macOS only)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Error)]
 #[error("launchctl invocation failed\n  hint: {hint}")]
 pub struct LaunchctlError {
@@ -67,6 +68,7 @@ pub struct LaunchctlError {
     pub hint: String,
 }
 
+#[cfg(target_os = "macos")]
 impl LaunchctlError {
     pub fn new(stderr: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
@@ -77,6 +79,7 @@ impl LaunchctlError {
 }
 
 /// Derive a human-readable hint from launchctl stderr output.
+#[cfg(target_os = "macos")]
 pub fn launchctl_hint(stderr: &str) -> String {
     let s = stderr.to_lowercase();
     if s.contains("no such file or directory") {
@@ -161,6 +164,7 @@ pub enum AppError {
     #[error("{0}")]
     ConfigMissing(#[from] ConfigMissingError),
 
+    #[cfg(target_os = "macos")]
     #[error("{0}")]
     Launchctl(#[from] LaunchctlError),
 
