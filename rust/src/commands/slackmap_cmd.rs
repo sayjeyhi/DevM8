@@ -3,7 +3,6 @@ use inquire::Text;
 use crate::config::loader::{load_config, write_config};
 use crate::config::schema::SlackConfig;
 use crate::shared::errors::{AppError, FriendlyError};
-use crate::shared::paths::PATHS;
 
 pub async fn slackmap_command() -> Result<(), AppError> {
     // ------------------------------------------------------------------

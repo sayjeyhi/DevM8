@@ -5,9 +5,6 @@ pub mod polling;
 pub mod state;
 pub mod utils;
 
-pub use bot::start_bot_from_config;
-pub use state::ChatState;
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,6 +23,7 @@ use crate::slack::SlackClient;
 // Shared application state passed to every Telegram handler
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct AppState {
     /// Jira client (shared, cheaply cloned via Arc).
     pub jira: Arc<JiraClient>,

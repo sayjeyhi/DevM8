@@ -2,13 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::{ChatState, PendingSolve};
 use crate::bot::utils::{escape_html, keep_typing, split_message};
 use crate::bot::AppState;
 use crate::claude::types::AskOptions;
-use crate::git::GitClient;
 
 const SOLVE_PROMPT_TEMPLATE: &str = "\
 You are a senior software engineer analyzing a Jira issue.

@@ -1,4 +1,5 @@
 /// Split a command argument string into whitespace-separated tokens.
+#[allow(dead_code)]
 pub fn parse_args(text: &str) -> Vec<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {

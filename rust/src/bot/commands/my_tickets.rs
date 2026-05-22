@@ -4,7 +4,7 @@ use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
-use crate::bot::state::{ChatState, PageCache};
+use crate::bot::state::PageCache;
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
 use crate::jira::types::JiraIssue;

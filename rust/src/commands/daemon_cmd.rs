@@ -6,9 +6,9 @@ use tokio_util::sync::CancellationToken;
 use crate::config::loader::load_config;
 use crate::daemon::pid::{remove_pid, write_pid};
 use crate::daemon::restart_tracker::RestartTracker;
-use crate::logger::{self, Level, OutputMode, append_to_log_file};
+use crate::logger::{self, Level, OutputMode};
 use crate::logger::rotate::rotate_if_needed;
-use crate::shared::errors::{AppError, FriendlyError};
+use crate::shared::errors::AppError;
 use crate::shared::paths::PATHS;
 
 // Current binary version — overridden by build script or env.

@@ -1,6 +1,5 @@
 use std::io::Write as _;
 
-use anyhow::Context;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::launchd::agent_status;

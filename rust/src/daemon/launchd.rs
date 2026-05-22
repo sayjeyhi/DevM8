@@ -227,7 +227,7 @@ fn parse_list_output(output: &str) -> AgentStatus {
 /// yields useful output.
 pub async fn agent_status() -> AgentStatus {
     // Attempt the richer `print` subcommand first.
-    let uid = unsafe { libc_uid() };
+    let uid = libc_uid();
     let service = format!("gui/{uid}/net.devm8");
 
     if let Ok(out) = run_launchctl(&["print", &service]) {

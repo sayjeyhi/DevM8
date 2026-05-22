@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 /// All well-known paths used by devm8, derived from the user's home directory.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Paths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,

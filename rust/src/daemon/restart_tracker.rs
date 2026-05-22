@@ -50,6 +50,7 @@ impl RestartTracker {
     }
 
     /// Reset the tracker (write an empty list).
+    #[allow(dead_code)]
     pub async fn reset(&self) -> anyhow::Result<()> {
         self.write(&[]).await
     }
@@ -111,6 +112,7 @@ impl Default for RestartTracker {
 // ---------------------------------------------------------------------------
 
 impl RestartTracker {
+    #[allow(dead_code)]
     pub fn from_path(path: impl AsRef<Path>) -> Self {
         Self::new(path.as_ref(), 10, 60_000)
     }

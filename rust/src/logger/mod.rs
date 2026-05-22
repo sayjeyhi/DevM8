@@ -71,6 +71,7 @@ pub trait Logger: Send + Sync {
     fn info(&self, msg: &str, meta: Option<&Value>);
     fn error(&self, msg: &str, meta: Option<&Value>);
     fn warn(&self, msg: &str, meta: Option<&Value>);
+    #[allow(dead_code)]
     fn debug(&self, msg: &str, meta: Option<&Value>);
 }
 

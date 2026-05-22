@@ -4,7 +4,7 @@ use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
-use crate::bot::state::{AskMode, AskSession, ChatState, HistoryEntry, PendingAsk, Role};
+use crate::bot::state::{AskMode, AskSession, HistoryEntry, PendingAsk, Role};
 use crate::bot::utils::{escape_html, keep_typing, split_message};
 use crate::bot::AppState;
 use crate::claude::types::AskOptions;

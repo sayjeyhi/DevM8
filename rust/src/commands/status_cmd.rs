@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use crate::config::loader::load_config;
 use crate::daemon::launchd::agent_status;

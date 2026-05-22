@@ -4,11 +4,10 @@ use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
-use crate::bot::state::{ChatState, PendingSlackAction};
+use crate::bot::state::PendingSlackAction;
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
 use crate::claude::types::AskOptions;
-use crate::slack::SlackClient;
 use crate::slack::types::SlackNewMessage;
 
 // ---------------------------------------------------------------------------
