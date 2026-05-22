@@ -1,0 +1,100 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::config::loader::load_config;
+use crate::daemon::launchd::agent_status;
+use crate::daemon::pid::{is_process_running, read_pid};
+use crate::shared::errors::AppError;
+use crate::shared::paths::PATHS;
+
+pub async fn status_command() -> Result<(), AppError> {
+    let paths = &*PATHS;
+
+    // ------------------------------------------------------------------
+    // Determine running state
+    // ------------------------------------------------------------------
+    let launchd = agent_status().await;
+    let pid_from_file = read_pid(None).await?;
+
+    let (state_str, effective_pid) = if launchd.running {
+        ("running", launchd.pid)
+    } else if let Some(pid) = pid_from_file {
+        if is_process_running(pid) {
+            ("running (dev)", Some(pid))
+        } else {
+            ("stopped", None)
+        }
+    } else {
+        ("stopped", None)
+    };
+
+    // ------------------------------------------------------------------
+    // Optional: load config for display (ignore errors)
+    // ------------------------------------------------------------------
+    let config = load_config(None).ok();
+
+    // ------------------------------------------------------------------
+    // Uptime (from PID file mtime)
+    // ------------------------------------------------------------------
+    let uptime_str = if state_str.starts_with("running") {
+        compute_uptime_from_pid_file(paths).unwrap_or_else(|| "unknown".to_string())
+    } else {
+        "-".to_string()
+    };
+
+    // ------------------------------------------------------------------
+    // Build output
+    // ------------------------------------------------------------------
+    let pid_display = effective_pid
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "-".to_string());
+
+    let config_path = paths.config_file.display().to_string();
+    let log_path = paths.log_file.display().to_string();
+
+    let jira_url = config
+        .as_ref()
+        .map(|c| c.jira.base_url.as_str())
+        .unwrap_or("-");
+
+    let projects = config
+        .as_ref()
+        .map(|c| c.jira.project_keys.join(", "))
+        .unwrap_or_else(|| "-".to_string());
+
+    println!("devm8 status");
+    println!("  State:    {}", state_str);
+    println!("  PID:      {}", pid_display);
+    println!("  Uptime:   {}", uptime_str);
+    println!("  Config:   {}", config_path);
+    println!("  Jira URL: {}", jira_url);
+    println!("  Projects: {}", projects);
+    println!("  Log:      {}", log_path);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn compute_uptime_from_pid_file(paths: &crate::shared::paths::Paths) -> Option<String> {
+    let meta = std::fs::metadata(&paths.pid_file).ok()?;
+    let modified = meta.modified().ok()?;
+    let elapsed = SystemTime::now().duration_since(modified).ok()?;
+    Some(format_duration(elapsed))
+}
+
+fn format_duration(d: Duration) -> String {
+    let total_secs = d.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, secs)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
