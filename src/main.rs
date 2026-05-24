@@ -12,7 +12,12 @@ mod slack;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "devm8", about = "DevM8 — Jira + Claude + Telegram assistant")]
+#[command(
+    name = "devm8",
+    about = "DevM8 — Jira + Claude + Telegram assistant",
+    version = env!("DEVM8_VERSION"),
+    long_version = env!("DEVM8_VERSION"),
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -51,6 +56,9 @@ enum Cmd {
 
     /// Configure Slack integration
     Slackmap,
+
+    /// Print version
+    Version,
 }
 
 #[tokio::main]
@@ -67,6 +75,7 @@ async fn main() {
             Cmd::Config => commands::config_command().await?,
             Cmd::Update => commands::update_command().await?,
             Cmd::Slackmap => commands::slackmap_command().await?,
+            Cmd::Version => println!("{}", env!("DEVM8_VERSION")),
         }
         Ok(())
     }
