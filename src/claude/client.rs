@@ -82,9 +82,19 @@ impl ClaudeClient {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
+            let binary = &self.config.binary_path;
+            let detail = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                diagnose_binary(binary)
+            } else if e.kind() == std::io::ErrorKind::NotFound {
+                format!(
+                    "binary not found at '{binary}' — run `devm8 config` to set the correct path"
+                )
+            } else {
+                e.to_string()
+            };
             self.logger
-                .error(&format!("claude: failed to spawn process: {e}"), None);
-            AppError::Other(anyhow::anyhow!("failed to spawn claude: {}", e))
+                .error(&format!("claude: failed to spawn: {detail}"), None);
+            AppError::Other(anyhow::anyhow!("{}", detail))
         })?;
 
         if let Some(mut stdin) = child.stdin.take() {
@@ -242,4 +252,36 @@ impl ClaudeClient {
             _ => {}
         }
     }
+}
+
+/// Build an actionable error message when spawning the claude binary returns EACCES.
+fn diagnose_binary(binary: &str) -> String {
+    let path = std::path::Path::new(binary);
+
+    if !path.exists() {
+        return format!(
+            "binary not found at '{binary}' — run `devm8 config` to set the correct path"
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.permissions().mode() & 0o111 == 0 {
+                return format!("binary at '{binary}' is not executable — run: chmod +x {binary}");
+            }
+        }
+
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        let uid = unsafe { geteuid() };
+        return format!(
+            "permission denied executing '{binary}' (running as uid {uid}) — check file ownership and permissions with: ls -la {binary}"
+        );
+    }
+
+    #[cfg(not(unix))]
+    format!("permission denied executing '{binary}'")
 }

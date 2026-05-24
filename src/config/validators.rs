@@ -119,11 +119,21 @@ pub fn validate_project_keys(v: &str) -> Option<String> {
 /// Validate that a binary path refers to an existing, executable file.
 pub fn validate_binary_path(v: &str) -> Option<String> {
     let path = std::path::Path::new(v);
-    if path.is_file() {
-        None
-    } else {
-        Some(format!("Binary not found at '{v}'"))
+    if !path.is_file() {
+        return Some(format!("Binary not found at '{v}'"));
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.permissions().mode() & 0o111 == 0 {
+                return Some(format!(
+                    "Binary at '{v}' is not executable — run: chmod +x {v}"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Validate a newline- or comma-separated list of directory paths.
