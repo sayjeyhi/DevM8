@@ -100,8 +100,8 @@ pub fn find_daemon_pids() -> Vec<u32> {
 
         // cmdline is null-terminated argv: "/path/to/devm8\0daemon\0..."
         let args: Vec<&[u8]> = data.split(|&b| b == 0).collect();
-        let arg0 = std::str::from_utf8(args.first().unwrap_or(&b"")).unwrap_or("");
-        let arg1 = std::str::from_utf8(args.get(1).unwrap_or(&b"")).unwrap_or("");
+        let arg0 = std::str::from_utf8(args.first().copied().unwrap_or(b"")).unwrap_or("");
+        let arg1 = std::str::from_utf8(args.get(1).copied().unwrap_or(b"")).unwrap_or("");
 
         if (arg0.ends_with("/devm8") || arg0 == "devm8") && arg1 == "daemon" {
             pids.push(pid);

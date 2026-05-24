@@ -294,11 +294,11 @@ update claude.binary_path in `devm8 config` to the actual claude binary inside t
             fn geteuid() -> u32;
         }
         let uid = unsafe { geteuid() };
-        return format!(
+        format!(
             "permission denied executing '{binary}' (uid {uid}, real path '{real}') — \
 check: ls -la {real}",
             real = real.display()
-        );
+        )
     }
 
     #[cfg(not(unix))]
