@@ -11,14 +11,18 @@ use crate::logger::{self, Level, OutputMode};
 use crate::shared::errors::AppError;
 use crate::shared::paths::PATHS;
 
-// Current binary version — overridden by build script or env.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+enum LoopControl {
+    Exit(anyhow::Result<()>),
+    Reload,
+}
 
 pub async fn daemon_command() -> Result<(), AppError> {
     // ------------------------------------------------------------------
     // Load configuration (exit 1 on error)
     // ------------------------------------------------------------------
-    let config = load_config(None).map_err(|e| {
+    let mut config = load_config(None).map_err(|e| {
         if let AppError::ConfigMissing(_) = &e {
             eprintln!("devm8: config not found. Run `devm8 config` to set up.");
         } else {
@@ -60,7 +64,7 @@ pub async fn daemon_command() -> Result<(), AppError> {
     let logger_clone = Arc::clone(&logger);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-        interval.tick().await; // skip the immediate first tick
+        interval.tick().await;
         loop {
             interval.tick().await;
             if let Err(e) = rotate_if_needed(&log_file_clone, None, None) {
@@ -70,7 +74,7 @@ pub async fn daemon_command() -> Result<(), AppError> {
     });
 
     // ------------------------------------------------------------------
-    // Log startup banner
+    // Log startup banner + write PID
     // ------------------------------------------------------------------
     let pid = std::process::id();
     logger.info(
@@ -82,68 +86,101 @@ pub async fn daemon_command() -> Result<(), AppError> {
         })),
     );
 
-    // ------------------------------------------------------------------
-    // Write PID file
-    // ------------------------------------------------------------------
     write_pid(pid, None).await?;
     logger.info("daemon ready", Some(&json!({ "pid": pid })));
 
     // ------------------------------------------------------------------
-    // SIGTERM handler via CancellationToken
+    // Signal streams (created once, reused across reload iterations)
     // ------------------------------------------------------------------
-    let ct = CancellationToken::new();
-    let ct_term = ct.clone();
+    #[cfg(unix)]
+    let (mut sigterm_stream, mut sighup_stream) = {
+        use tokio::signal::unix::{signal, SignalKind};
+        (
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler"),
+            signal(SignalKind::hangup()).expect("Failed to install SIGHUP handler"),
+        )
+    };
 
-    tokio::spawn(async move {
+    // ------------------------------------------------------------------
+    // Polling loop — restarts on SIGHUP, exits on SIGTERM or error
+    // ------------------------------------------------------------------
+    loop {
+        let ct = CancellationToken::new();
+
         #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
-            sigterm.recv().await;
-            ct_term.cancel();
-        }
+        let control = {
+            let ct_clone = ct.clone();
+            tokio::select! {
+                r = crate::bot::polling::start_polling(ct, &logger, &config) => {
+                    LoopControl::Exit(r.map_err(anyhow::Error::from))
+                }
+                _ = sigterm_stream.recv() => {
+                    ct_clone.cancel();
+                    LoopControl::Exit(Ok(()))
+                }
+                _ = sighup_stream.recv() => {
+                    ct_clone.cancel();
+                    LoopControl::Reload
+                }
+            }
+        };
+
         #[cfg(not(unix))]
-        {
-            // On non-Unix platforms just wait for Ctrl-C.
-            let _ = tokio::signal::ctrl_c().await;
-            ct_term.cancel();
-        }
-    });
-
-    // ------------------------------------------------------------------
-    // Run the bot / polling loop
-    // ------------------------------------------------------------------
-    let poll_result = crate::bot::polling::start_polling(ct.clone(), &logger, &config).await;
-
-    // ------------------------------------------------------------------
-    // Graceful shutdown
-    // ------------------------------------------------------------------
-    let _ = remove_pid(None).await;
-
-    match poll_result {
-        Ok(()) => {
-            logger.info("shutdown complete", None);
-            Ok(())
-        }
-        Err(e) => {
-            logger.error(&format!("polling error: {e}"), None);
-
-            // Check restart limit — if exceeded, exit 0 so launchd stops retrying.
-            match tracker.record_restart().await {
-                Ok(true) => {
-                    logger.warn(
-                        "restart limit exceeded — exiting with 0 to stop launchd retries",
-                        None,
-                    );
-                    std::process::exit(0);
+        let control = {
+            // On non-Unix: no SIGHUP, just wait for Ctrl-C or natural end.
+            let ct_clone = ct.clone();
+            tokio::select! {
+                r = crate::bot::polling::start_polling(ct, &logger, &config) => {
+                    LoopControl::Exit(r.map_err(anyhow::Error::from))
                 }
-                Ok(false) => {
-                    std::process::exit(1);
+                _ = tokio::signal::ctrl_c() => {
+                    ct_clone.cancel();
+                    LoopControl::Exit(Ok(()))
                 }
-                Err(te) => {
-                    logger.warn(&format!("restart tracker error: {te}"), None);
-                    std::process::exit(1);
+            }
+        };
+
+        match control {
+            LoopControl::Reload => {
+                logger.info("SIGHUP received — reloading config", None);
+                match load_config(None) {
+                    Ok(new_cfg) => {
+                        config = new_cfg;
+                        logger.info("config reloaded, restarting bot", None);
+                    }
+                    Err(e) => {
+                        logger.warn(
+                            &format!("config reload failed, keeping previous config: {e}"),
+                            None,
+                        );
+                    }
+                }
+                // continue loop with (possibly updated) config
+            }
+
+            LoopControl::Exit(Ok(())) => {
+                let _ = remove_pid(None).await;
+                logger.info("shutdown complete", None);
+                return Ok(());
+            }
+
+            LoopControl::Exit(Err(e)) => {
+                let _ = remove_pid(None).await;
+                logger.error(&format!("polling error: {e}"), None);
+
+                match tracker.record_restart().await {
+                    Ok(true) => {
+                        logger.warn(
+                            "restart limit exceeded — exiting with 0 to stop launchd retries",
+                            None,
+                        );
+                        std::process::exit(0);
+                    }
+                    Ok(false) => std::process::exit(1),
+                    Err(te) => {
+                        logger.warn(&format!("restart tracker error: {te}"), None);
+                        std::process::exit(1);
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ use std::path::Path;
 use inquire::Text;
 
 use crate::config::loader::{load_config, write_config};
+use crate::daemon::pid::signal_daemon_reload;
 use crate::shared::errors::{AppError, FriendlyError};
 use crate::shared::paths::expand_tilde;
 
@@ -68,6 +69,7 @@ pub fn register_project(path: &str, key: &str) -> Result<(), AppError> {
     if !paths.contains(&path.to_string()) {
         paths.push(path.to_string());
         write_config(&config, None)?;
+        signal_daemon_reload();
     }
 
     Ok(())
