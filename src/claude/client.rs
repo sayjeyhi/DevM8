@@ -44,26 +44,19 @@ impl ClaudeClient {
         cmd
     }
 
-    /// Build a bubblewrap-sandboxed command.
-    /// Claude sees only /workspace (the project dir) and /home/sandbox/.claude (read-only auth).
-    /// Every other home dir and unrelated path is hidden from the subprocess.
+    /// Shared bwrap namespace setup used by both Claude and shell commands.
+    /// Returns a Command ready for appending the binary + its args.
     #[cfg(target_os = "linux")]
-    fn build_bwrap_command(&self, opts: &AskOptions) -> Command {
+    fn build_bwrap_base(&self, cwd: Option<&str>) -> Command {
         let mut cmd = Command::new("bwrap");
 
-        // Bind whole rootfs read-only so claude binary and system libs remain accessible.
         cmd.args(["--ro-bind", "/", "/"]);
-
-        // Override with fresh kernel-managed mounts.
         cmd.args(["--proc", "/proc"]);
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--tmpfs", "/tmp"]);
-
-        // Wipe all user home dirs: SSH keys, other projects, credentials become invisible.
         cmd.args(["--tmpfs", "/home"]);
         cmd.args(["--tmpfs", "/root"]);
 
-        // Fake home for Claude's auth files.
         cmd.args(["--dir", "/home/sandbox"]);
         if let Ok(host_home) = std::env::var("HOME") {
             let claude_dir = format!("{host_home}/.claude");
@@ -72,16 +65,15 @@ impl ClaudeClient {
             }
         }
 
-        // Mount only the target project dir as writable at /workspace.
-        let inner_cwd = if let Some(ref cwd) = opts.cwd {
-            cmd.args(["--bind", cwd, "/workspace"]);
-            "/workspace"
+        let inner_cwd = if let Some(cwd) = cwd {
+            cmd.args(["--dir", "/tmp/workspace"]);
+            cmd.args(["--bind", cwd, "/tmp/workspace"]);
+            "/tmp/workspace"
         } else {
             "/tmp"
         };
         cmd.args(["--chdir", inner_cwd]);
 
-        // Clear the inherited environment so no host secrets leak in.
         cmd.arg("--clearenv");
         cmd.args(["--setenv", "HOME", "/home/sandbox"]);
         cmd.args(["--setenv", "TMPDIR", "/tmp"]);
@@ -91,7 +83,6 @@ impl ClaudeClient {
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ]);
 
-        // Thread the Anthropic API key in explicitly (env was cleared above).
         let api_key = self
             .config
             .api_key
@@ -101,8 +92,6 @@ impl ClaudeClient {
             cmd.args(["--setenv", "ANTHROPIC_API_KEY", key]);
         }
 
-        // Isolate PID, hostname, and IPC namespaces.
-        // No --unshare-net: Claude needs to reach the Anthropic API.
         cmd.args([
             "--unshare-pid",
             "--unshare-uts",
@@ -110,7 +99,12 @@ impl ClaudeClient {
             "--die-with-parent",
         ]);
 
-        // The claude binary and its flags follow all bwrap options.
+        cmd
+    }
+
+    #[cfg(target_os = "linux")]
+    fn build_bwrap_command(&self, opts: &AskOptions) -> Command {
+        let mut cmd = self.build_bwrap_base(opts.cwd.as_deref());
         cmd.arg(&self.config.binary_path);
         cmd.args([
             "--print",
@@ -129,6 +123,23 @@ impl ClaudeClient {
             return self.build_bwrap_command(opts);
         }
         self.build_direct_command(opts)
+    }
+
+    /// Build a sandboxed `sh -c <shell_cmd>` command using the same bwrap namespace as Claude.
+    /// On macOS or when sandbox is disabled, falls back to a plain `sh -c`.
+    pub fn sandboxed_sh_command(&self, cwd: Option<&str>, shell_cmd: &str) -> Command {
+        #[cfg(target_os = "linux")]
+        if self.config.sandbox_enabled {
+            let mut cmd = self.build_bwrap_base(cwd);
+            cmd.args(["sh", "-c", shell_cmd]);
+            return cmd;
+        }
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", shell_cmd]);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd
     }
 
     pub async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<String, AppError> {

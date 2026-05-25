@@ -571,13 +571,9 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
                 .parse_mode(ParseMode::Html)
                 .await?;
 
-            let mut cmd = tokio::process::Command::new("sh");
-            cmd.args(["-c", &text]);
+            let mut cmd = state.claude.sandboxed_sh_command(cwd.as_deref(), &text);
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
-            if let Some(ref dir) = cwd {
-                cmd.current_dir(dir);
-            }
 
             let output =
                 tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await;
