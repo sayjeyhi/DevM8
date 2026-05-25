@@ -17,14 +17,17 @@ use super::{
 pub async fn handle_jira(bot: Bot, msg: Message, _state: Arc<AppState>) -> Result<()> {
     let keyboard = InlineKeyboardMarkup::new(vec![
         vec![
-            InlineKeyboardButton::callback("My Tickets", "jira:my_tickets"),
-            InlineKeyboardButton::callback("Create Issue", "jira:create"),
+            InlineKeyboardButton::callback("🎫 My Tickets", "jira:my_tickets"),
+            InlineKeyboardButton::callback("✏️ Create Issue", "jira:create"),
         ],
         vec![
-            InlineKeyboardButton::callback("Move Issue", "jira:move"),
-            InlineKeyboardButton::callback("Add Comment", "jira:comment"),
+            InlineKeyboardButton::callback("🔀 Move Issue", "jira:move"),
+            InlineKeyboardButton::callback("💬 Add Comment", "jira:comment"),
         ],
-        vec![InlineKeyboardButton::callback("Solve Issue", "jira:solve")],
+        vec![InlineKeyboardButton::callback(
+            "✅ Solve Issue",
+            "jira:solve",
+        )],
     ]);
 
     bot.send_message(msg.chat.id, "Jira — choose an action:")

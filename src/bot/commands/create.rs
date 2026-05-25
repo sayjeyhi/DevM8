@@ -101,7 +101,7 @@ pub async fn handle_create_suggest(
     ));
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "Use this description",
+        "✅ Use this description",
         "jira:create_confirm",
     )]]);
 
