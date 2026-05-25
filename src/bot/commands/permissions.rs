@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 
 use crate::bot::state::PendingPermissions;
 use crate::bot::AppState;
@@ -13,18 +13,18 @@ use crate::config::loader::{load_config, write_config};
 // /permissions → show user list
 // ---------------------------------------------------------------------------
 
-pub async fn handle_permissions(bot: Bot, msg: Message, state: Arc<AppState>) -> Result<()> {
+pub async fn handle_permissions(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> Result<()> {
     let text = user_list_text(&state);
     let keyboard = build_user_list_keyboard(&state);
 
     let sent = bot
-        .send_message(msg.chat.id, text)
+        .send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
         .reply_markup(keyboard)
         .await?;
 
     {
-        let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.0).or_default();
         entry.pending_permissions = Some(PendingPermissions {
             target_user_id: None,
             selected: HashSet::new(),

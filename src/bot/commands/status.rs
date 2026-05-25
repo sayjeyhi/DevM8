@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{ChatId, ParseMode};
 
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
 use crate::daemon::agent_status;
 use crate::daemon::pid::{is_process_running, read_pid};
 
-pub async fn handle_status(bot: Bot, msg: Message, state: Arc<AppState>) -> Result<()> {
+pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> Result<()> {
     let launchd = agent_status().await;
     let pid_from_file = read_pid(None).await.ok().flatten();
 
@@ -49,7 +49,7 @@ pub async fn handle_status(bot: Bot, msg: Message, state: Arc<AppState>) -> Resu
          Git projects:  <code>{git_projects}</code>"
     );
 
-    bot.send_message(msg.chat.id, text)
+    bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
         .await?;
 

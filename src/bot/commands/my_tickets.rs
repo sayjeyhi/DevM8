@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::{AskSession, PageCache};
 use crate::bot::utils::escape_html;
@@ -134,21 +134,21 @@ pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
 
 pub async fn handle_my_tickets(
     bot: Bot,
-    msg: Message,
+    chat_id: ChatId,
     state: Arc<AppState>,
     user_id: i64,
 ) -> Result<()> {
     let project_keys = accessible_project_keys(user_id, &state);
 
     if project_keys.is_empty() {
-        bot.send_message(msg.chat.id, "No project keys configured.")
+        bot.send_message(chat_id, "No project keys configured.")
             .await?;
         return Ok(());
     }
 
     if project_keys.len() == 1 {
         let key = project_keys[0].clone();
-        return handle_my_tickets_project(bot, msg.chat.id, state, &key).await;
+        return handle_my_tickets_project(bot, chat_id, state, &key).await;
     }
 
     // Multiple project keys — show picker
@@ -163,7 +163,7 @@ pub async fn handle_my_tickets(
         .collect();
 
     let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(msg.chat.id, "Select a project:")
+    bot.send_message(chat_id, "Select a project:")
         .reply_markup(keyboard)
         .await?;
 

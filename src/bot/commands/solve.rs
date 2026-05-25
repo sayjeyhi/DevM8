@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::{ChatState, PendingSolve};
 use crate::bot::utils::{escape_html, keep_typing, split_message};
@@ -439,13 +439,13 @@ pub async fn handle_branch_choice(
 
 pub async fn handle_solve(
     bot: Bot,
-    msg: Message,
+    chat_id: ChatId,
     state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
     let issue_key = args.trim().to_string();
     if issue_key.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /solve &lt;issue-key&gt;")
+        bot.send_message(chat_id, "Send the issue key:\n<code>MYAPP-123</code>")
             .parse_mode(ParseMode::Html)
             .await?;
         return Ok(());
@@ -461,9 +461,9 @@ pub async fn handle_solve(
     );
 
     if has_repos {
-        handle_repo_picker(bot, msg.chat.id, state, &issue_key).await
+        handle_repo_picker(bot, chat_id, state, &issue_key).await
     } else {
-        solve_by_key(bot, msg.chat.id, state, &issue_key, None).await
+        solve_by_key(bot, chat_id, state, &issue_key, None).await
     }
 }
 

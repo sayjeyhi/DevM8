@@ -19,6 +19,17 @@ pub fn parse_args(text: &str) -> Vec<String> {
 ///     Some(("PROJ-1".into(), "fix the thing".into()))
 /// );
 /// ```
+/// Extract the uppercase project key from the first token of an issue-key string.
+/// E.g. "MYAPP-123 some text" → Some("MYAPP"), "notanissue" → None.
+pub fn project_key_from_args(args: &str) -> Option<String> {
+    let first = args.split_whitespace().next()?;
+    let (prefix, _) = first.split_once('-')?;
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(prefix.to_uppercase())
+}
+
 pub fn parse_first_and_rest(input: &str) -> Option<(String, String)> {
     let mut iter = input.trim().splitn(2, char::is_whitespace);
     let first = iter.next()?.trim().to_string();

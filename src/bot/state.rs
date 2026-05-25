@@ -111,6 +111,28 @@ pub struct PendingSolve {
 }
 
 // ---------------------------------------------------------------------------
+// Admin panel pending input
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminPendingAction {
+    Clone,
+    AddProject,
+}
+
+// ---------------------------------------------------------------------------
+// Jira panel pending input
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JiraPendingAction {
+    Create,
+    Move,
+    Comment,
+    Solve,
+}
+
+// ---------------------------------------------------------------------------
 // Permissions wizard state
 // ---------------------------------------------------------------------------
 
@@ -152,4 +174,10 @@ pub struct ChatState {
 
     /// Active /permissions wizard
     pub pending_permissions: Option<PendingPermissions>,
+
+    /// Waiting for admin to type input for an admin panel action
+    pub pending_admin_action: Option<AdminPendingAction>,
+
+    /// Waiting for user to type input for a Jira panel action
+    pub pending_jira_action: Option<JiraPendingAction>,
 }

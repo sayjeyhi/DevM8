@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{ChatId, ParseMode};
 
 use crate::bot::utils::keep_typing;
 use crate::bot::AppState;
@@ -32,15 +32,16 @@ Keep the tone professional. Output only the final description text with no pream
 
 pub async fn handle_create(
     bot: Bot,
-    msg: Message,
+    chat_id: ChatId,
     state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
     let args = args.trim().to_string();
     if args.is_empty() {
         bot.send_message(
-            msg.chat.id,
-            "Usage: /create &lt;title&gt; [-- &lt;description&gt;]",
+            chat_id,
+            "Send the issue title (optionally with description after <code>--</code>):\n\
+             <code>New login page -- Add OAuth2 support</code>",
         )
         .parse_mode(ParseMode::Html)
         .await?;
@@ -60,8 +61,8 @@ pub async fn handle_create(
         Some(&json!({ "title": &title, "has_description": use_enrich })),
     );
 
-    let thinking = bot.send_message(msg.chat.id, "Thinking...").await?;
-    let _typing = keep_typing(bot.clone(), msg.chat.id);
+    let thinking = bot.send_message(chat_id, "Thinking...").await?;
+    let _typing = keep_typing(bot.clone(), chat_id);
 
     let prompt = if use_enrich {
         ENRICH_PROMPT_TEMPLATE
@@ -78,7 +79,7 @@ pub async fn handle_create(
                 &format!("create: Claude error: {e}"),
                 Some(&json!({ "title": &title })),
             );
-            bot.edit_message_text(msg.chat.id, thinking.id, format!("Claude error: {e}"))
+            bot.edit_message_text(chat_id, thinking.id, format!("Claude error: {e}"))
                 .await?;
             return Ok(());
         }
@@ -96,7 +97,7 @@ pub async fn handle_create(
                 &format!("create: Jira error: {e}"),
                 Some(&json!({ "title": &title })),
             );
-            bot.edit_message_text(msg.chat.id, thinking.id, format!("Jira error: {e}"))
+            bot.edit_message_text(chat_id, thinking.id, format!("Jira error: {e}"))
                 .await?;
             return Ok(());
         }
@@ -108,7 +109,7 @@ pub async fn handle_create(
     );
 
     bot.edit_message_text(
-        msg.chat.id,
+        chat_id,
         thinking.id,
         format!(
             "Created: <a href=\"{}\">{}</a> — {}",

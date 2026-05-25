@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{ChatId, ParseMode};
 use tokio::process::Command;
 
 use crate::bot::utils::escape_html;
@@ -19,7 +19,7 @@ fn repo_name_from_url(url: &str) -> String {
 
 pub async fn handle_clone(
     bot: Bot,
-    msg: Message,
+    chat_id: ChatId,
     _state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
@@ -28,9 +28,9 @@ pub async fn handle_clone(
         Some(u) => u.to_string(),
         None => {
             bot.send_message(
-                msg.chat.id,
-                "Usage: /clone &lt;ssh_url&gt; &lt;dest_path&gt;\n\
-                 Example: /clone git@github.com:org/repo.git /home/user/projects",
+                chat_id,
+                "Send the SSH URL and destination path:\n\
+                 <code>git@github.com:org/repo.git /home/user/projects</code>",
             )
             .parse_mode(ParseMode::Html)
             .await?;
@@ -42,9 +42,9 @@ pub async fn handle_clone(
         Some(p) => p.to_string(),
         None => {
             bot.send_message(
-                msg.chat.id,
-                "Usage: /clone &lt;ssh_url&gt; &lt;dest_path&gt;\n\
-                 Example: /clone git@github.com:org/repo.git /home/user/projects",
+                chat_id,
+                "Send the SSH URL and destination path:\n\
+                 <code>git@github.com:org/repo.git /home/user/projects</code>",
             )
             .parse_mode(ParseMode::Html)
             .await?;
@@ -60,7 +60,7 @@ pub async fn handle_clone(
 
     let progress = bot
         .send_message(
-            msg.chat.id,
+            chat_id,
             format!(
                 "Cloning <code>{}</code> → <code>{}</code>…",
                 escape_html(&ssh_url),
@@ -95,7 +95,7 @@ pub async fn handle_clone(
         },
     };
 
-    bot.edit_message_text(msg.chat.id, progress.id, reply)
+    bot.edit_message_text(chat_id, progress.id, reply)
         .parse_mode(ParseMode::Html)
         .await?;
 

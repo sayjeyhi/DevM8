@@ -3,14 +3,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{ChatId, ParseMode};
 
 use crate::bot::utils::parse_first_and_rest;
 use crate::bot::AppState;
 
 pub async fn handle_comment(
     bot: Bot,
-    msg: Message,
+    chat_id: ChatId,
     state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
@@ -20,8 +20,9 @@ pub async fn handle_comment(
         Some(pair) => pair,
         None => {
             bot.send_message(
-                msg.chat.id,
-                "Usage: /comment &lt;issue-key&gt; &lt;text&gt;",
+                chat_id,
+                "Send the issue key and comment text:\n\
+                 <code>MYAPP-123 Fixed in PR #42</code>",
             )
             .parse_mode(ParseMode::Html)
             .await?;
@@ -38,7 +39,7 @@ pub async fn handle_comment(
             state
                 .logger
                 .info("comment: comment added", Some(&json!({ "key": &key })));
-            bot.send_message(msg.chat.id, format!("Comment added to <b>{}</b>", key))
+            bot.send_message(chat_id, format!("Comment added to <b>{}</b>", key))
                 .parse_mode(ParseMode::Html)
                 .await?;
         }
@@ -47,7 +48,7 @@ pub async fn handle_comment(
                 &format!("comment: failed to add comment: {e}"),
                 Some(&json!({ "key": &key })),
             );
-            bot.send_message(msg.chat.id, format!("Error: {e}")).await?;
+            bot.send_message(chat_id, format!("Error: {e}")).await?;
         }
     }
 
