@@ -276,7 +276,7 @@ async fn dispatch_command(
             handle_solve(bot, msg, state, args).await
         }
         BotCommand::MyTickets => handle_my_tickets(bot, msg, state, user_id).await,
-        BotCommand::Ask(args) => handle_ask(bot, msg, state, args).await,
+        BotCommand::Ask(args) => handle_ask(bot, msg, state, args, user_id).await,
         BotCommand::Logs(args) => {
             if !is_admin(user_id, &state) {
                 bot.send_message(msg.chat.id, "Access denied. This command is admin-only.")

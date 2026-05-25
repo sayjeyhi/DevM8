@@ -276,19 +276,49 @@ pub async fn ask_with_session(
 // Main command handler
 // ---------------------------------------------------------------------------
 
-pub async fn handle_ask(bot: Bot, msg: Message, state: Arc<AppState>, args: String) -> Result<()> {
-    let question = args.trim().to_string();
-
-    // Collect available repos
-    let all_repos: Vec<(String, std::path::PathBuf)> = state
+/// Returns the git repos accessible to `user_id`, preserving a stable ordering.
+/// Each entry is `(project_key, repo_path, git_client)`.
+fn accessible_repos(
+    state: &AppState,
+    user_id: i64,
+) -> Vec<(String, std::path::PathBuf, Arc<crate::git::GitClient>)> {
+    let access = state.project_access.read().unwrap();
+    let is_admin = state.config.telegram.admin_user_id == Some(user_id);
+    let mut repos: Vec<(String, std::path::PathBuf, Arc<crate::git::GitClient>)> = state
         .git_map
         .iter()
+        .filter(|(project_key, _)| {
+            if is_admin || access.is_empty() {
+                return true;
+            }
+            match access.get(project_key.as_str()) {
+                None => true,
+                Some(ids) => ids.contains(&user_id),
+            }
+        })
         .flat_map(|(project_key, repos)| {
             repos
                 .iter()
-                .map(|g| (project_key.clone(), g.repo_path.clone()))
+                .map(|g| (project_key.clone(), g.repo_path.clone(), Arc::clone(g)))
                 .collect::<Vec<_>>()
         })
+        .collect();
+    repos.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    repos
+}
+
+pub async fn handle_ask(
+    bot: Bot,
+    msg: Message,
+    state: Arc<AppState>,
+    args: String,
+    user_id: i64,
+) -> Result<()> {
+    let question = args.trim().to_string();
+
+    let all_repos: Vec<(String, std::path::PathBuf)> = accessible_repos(&state, user_id)
+        .into_iter()
+        .map(|(k, p, _)| (k, p))
         .collect();
 
     if all_repos.is_empty() {
@@ -648,29 +678,11 @@ pub async fn handle_ask_session_callback(
     if data.starts_with("ask:repo:") {
         let idx: usize = data.trim_start_matches("ask:repo:").parse().unwrap_or(0);
 
-        let all_repos: Vec<(
-            String,
-            std::path::PathBuf,
-            Option<Arc<crate::git::GitClient>>,
-        )> = state
-            .git_map
-            .iter()
-            .flat_map(|(project_key, repos)| {
-                repos
-                    .iter()
-                    .map(|g| {
-                        (
-                            project_key.clone(),
-                            g.repo_path.clone(),
-                            Some(Arc::clone(g)),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let user_id = q.from.id.0 as i64;
+        let all_repos = accessible_repos(&state, user_id);
 
-        let (project_key, repo_path, git) = match all_repos.get(idx) {
-            Some(item) => item.clone(),
+        let (project_key, repo_path, git) = match all_repos.into_iter().nth(idx) {
+            Some(item) => (item.0, item.1, Some(item.2)),
             None => {
                 bot.send_message(chat_id, "Invalid selection.").await?;
                 return Ok(());
