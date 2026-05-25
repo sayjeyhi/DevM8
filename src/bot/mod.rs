@@ -7,7 +7,7 @@ pub mod state;
 pub mod utils;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 
@@ -49,6 +49,11 @@ pub struct AppState {
 
     /// Telegram bot username (e.g. "MyBot"), used to generate deep links.
     pub bot_username: String,
+
+    /// Live project-access map (project key → allowed user IDs).
+    /// Wraps a copy of config.telegram.project_access and is updated at
+    /// runtime by /permissions without requiring a daemon restart.
+    pub project_access: RwLock<HashMap<String, Vec<i64>>>,
 }
 
 impl AppState {
@@ -100,6 +105,8 @@ impl AppState {
             .as_ref()
             .map(|sc| Arc::new(SlackClient::new(sc.user_token.clone())));
 
+        let project_access = RwLock::new(config.telegram.project_access.clone());
+
         Ok(Self {
             jira,
             claude,
@@ -109,6 +116,7 @@ impl AppState {
             git_map,
             slack,
             bot_username,
+            project_access,
         })
     }
 }

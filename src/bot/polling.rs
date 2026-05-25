@@ -13,7 +13,8 @@ use super::commands::{
     ask_with_session, handle_add_project, handle_ask, handle_ask_session_callback,
     handle_ask_text_input, handle_clone, handle_comment, handle_create, handle_help, handle_logs,
     handle_move, handle_my_tickets, handle_my_tickets_callback, handle_pending_comment,
-    handle_solve, handle_solve_repo_callback, handle_status,
+    handle_permissions, handle_permissions_done, handle_permissions_toggle,
+    handle_permissions_user_input, handle_solve, handle_solve_repo_callback, handle_status,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
 use super::AppState;
@@ -49,6 +50,8 @@ pub enum BotCommand {
     Status,
     #[command(description = "Register a local git repo as a project")]
     AddProject(String),
+    #[command(description = "Manage user project permissions (admin only)")]
+    Permissions,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +222,7 @@ async fn dispatch_command(
         BotCommand::Clone(_) => "clone",
         BotCommand::Status => "status",
         BotCommand::AddProject(_) => "add_project",
+        BotCommand::Permissions => "permissions",
     };
     state.logger.info(
         "command received",
@@ -241,10 +245,37 @@ async fn dispatch_command(
             }
         }
         BotCommand::Create(args) => handle_create(bot, msg, state, args).await,
-        BotCommand::Move(args) => handle_move(bot, msg, state, args).await,
-        BotCommand::Comment(args) => handle_comment(bot, msg, state, args).await,
-        BotCommand::Solve(args) => handle_solve(bot, msg, state, args).await,
-        BotCommand::MyTickets => handle_my_tickets(bot, msg, state).await,
+        BotCommand::Move(args) => {
+            if let Some(pk) = project_key_from_issue_args(&args) {
+                if !is_authorized_for_project(user_id, &pk, &state) {
+                    bot.send_message(msg.chat.id, "Access denied for that project.")
+                        .await?;
+                    return Ok(());
+                }
+            }
+            handle_move(bot, msg, state, args).await
+        }
+        BotCommand::Comment(args) => {
+            if let Some(pk) = project_key_from_issue_args(&args) {
+                if !is_authorized_for_project(user_id, &pk, &state) {
+                    bot.send_message(msg.chat.id, "Access denied for that project.")
+                        .await?;
+                    return Ok(());
+                }
+            }
+            handle_comment(bot, msg, state, args).await
+        }
+        BotCommand::Solve(args) => {
+            if let Some(pk) = project_key_from_issue_args(&args) {
+                if !is_authorized_for_project(user_id, &pk, &state) {
+                    bot.send_message(msg.chat.id, "Access denied for that project.")
+                        .await?;
+                    return Ok(());
+                }
+            }
+            handle_solve(bot, msg, state, args).await
+        }
+        BotCommand::MyTickets => handle_my_tickets(bot, msg, state, user_id).await,
         BotCommand::Ask(args) => handle_ask(bot, msg, state, args).await,
         BotCommand::Logs(args) => {
             if !is_admin(user_id, &state) {
@@ -271,6 +302,14 @@ async fn dispatch_command(
             }
             handle_add_project(bot, msg, state, args).await
         }
+        BotCommand::Permissions => {
+            if !is_admin(user_id, &state) {
+                bot.send_message(msg.chat.id, "Access denied. This command is admin-only.")
+                    .await?;
+                return Ok(());
+            }
+            handle_permissions(bot, msg, state).await
+        }
     }
 }
 
@@ -294,13 +333,32 @@ async fn dispatch_callback(
         return Ok(());
     }
 
-    let data = query.data.as_deref().unwrap_or("");
+    let data = query.data.clone().unwrap_or_default();
     state.logger.debug(
         "callback received",
         Some(&serde_json::json!({ "data": data, "user_id": user_id })),
     );
 
     if data.starts_with("tickets:") {
+        // Gate project-scoped callbacks before routing into the handler.
+        let denied_project = if let Some(key) = data.strip_prefix("tickets:project:") {
+            (!is_authorized_for_project(user_id, key, &state)).then_some(key.to_string())
+        } else if let Some(rest) = data.strip_prefix("tickets:status:") {
+            let project_key = rest.split(':').next().unwrap_or("");
+            (!is_authorized_for_project(user_id, project_key, &state))
+                .then_some(project_key.to_string())
+        } else {
+            None
+        };
+
+        if denied_project.is_some() {
+            if let Some(msg) = query.message.as_ref() {
+                bot.send_message(msg.chat().id, "Access denied for that project.")
+                    .await?;
+            }
+            return Ok(());
+        }
+
         return handle_my_tickets_callback(bot, query, state).await;
     }
 
@@ -335,6 +393,17 @@ async fn dispatch_callback(
         return handle_slack_callback(bot, query, state).await;
     }
 
+    if data.starts_with("perms:") {
+        if data == "perms:done" {
+            return handle_permissions_done(bot, query, state).await;
+        }
+        if let Some(key) = data.strip_prefix("perms:toggle:") {
+            return handle_permissions_toggle(bot, query, state, key.to_string()).await;
+        }
+        let _ = bot.answer_callback_query(query.id).await;
+        return Ok(());
+    }
+
     let _ = bot.answer_callback_query(query.id).await;
     Ok(())
 }
@@ -354,6 +423,22 @@ async fn dispatch_message(
     }
 
     let chat_id = msg.chat.id.0;
+
+    // Check pending permissions: waiting for admin to type a target user ID.
+    let waiting_for_user_id = state
+        .chat_states
+        .get(&chat_id)
+        .map(|s| {
+            s.pending_permissions
+                .as_ref()
+                .map(|p| p.target_user_id.is_none())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if waiting_for_user_id {
+        return handle_permissions_user_input(bot, msg, state).await;
+    }
 
     // Check pending comment
     let pending_comment = state
@@ -427,5 +512,30 @@ fn is_admin(user_id: i64, state: &AppState) -> bool {
     match state.config.telegram.admin_user_id {
         Some(admin_id) => user_id == admin_id,
         None => true,
+    }
+}
+
+/// Returns the uppercase project key from the first token of an issue-key argument string.
+/// E.g. "MYAPP-123 some text" → Some("MYAPP"), "notanissue" → None.
+fn project_key_from_issue_args(args: &str) -> Option<String> {
+    let first = args.trim().split_whitespace().next()?;
+    let (prefix, _) = first.split_once('-')?;
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(prefix.to_uppercase())
+}
+
+fn is_authorized_for_project(user_id: i64, project_key: &str, state: &AppState) -> bool {
+    if is_admin(user_id, state) {
+        return true;
+    }
+    let access = state.project_access.read().unwrap();
+    if access.is_empty() {
+        return true;
+    }
+    match access.get(project_key) {
+        None => true,
+        Some(ids) => ids.contains(&user_id),
     }
 }

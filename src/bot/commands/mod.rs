@@ -7,6 +7,7 @@ pub mod help;
 pub mod logs;
 pub mod move_cmd;
 pub mod my_tickets;
+pub mod permissions;
 pub mod solve;
 pub mod status;
 
@@ -19,5 +20,9 @@ pub use help::handle_help;
 pub use logs::handle_logs;
 pub use move_cmd::handle_move;
 pub use my_tickets::{handle_my_tickets, handle_my_tickets_callback};
+pub use permissions::{
+    handle_permissions, handle_permissions_done, handle_permissions_toggle,
+    handle_permissions_user_input,
+};
 pub use solve::{handle_solve, handle_solve_repo_callback};
 pub use status::handle_status;

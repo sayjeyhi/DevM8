@@ -26,6 +26,10 @@ pub struct TelegramConfig {
     /// Single admin user ID. Only this user can run add_project, logs, clone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_user_id: Option<i64>,
+    /// Per-project access: project key → list of allowed user IDs.
+    /// If a project key is absent, all allowed_user_ids can access it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub project_access: HashMap<String, Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

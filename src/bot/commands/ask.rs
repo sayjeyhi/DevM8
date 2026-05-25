@@ -60,11 +60,10 @@ async fn send_repo_ready_message(
     repo_name: &str,
     git: &Arc<crate::git::GitClient>,
 ) -> Result<()> {
-    let branch = git
-        .current_branch()
-        .await
-        .unwrap_or_else(|_| "unknown".into());
-    let clean = git.is_clean().await.unwrap_or(true);
+    let (branch, clean, behind) =
+        tokio::join!(git.current_branch(), git.is_clean(), git.commits_behind(),);
+    let branch = branch.unwrap_or_else(|_| "unknown".into());
+    let clean = clean.unwrap_or(true);
     let status_icon = if clean { "✅ clean" } else { "⚠️ dirty" };
 
     let text = format!(
@@ -75,10 +74,14 @@ async fn send_repo_ready_message(
         status_icon,
     );
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("⬇️ Pull latest", "ask:pull_latest"),
-        InlineKeyboardButton::callback("💻 CLI", "ask:cli"),
-    ]]);
+    let pull_label = format!("⬇️ Pull latest ({} behind)", behind);
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            pull_label,
+            "ask:pull_latest",
+        )],
+        vec![InlineKeyboardButton::callback("💻 CLI", "ask:cli")],
+    ]);
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -110,6 +111,21 @@ pub struct PendingSolve {
 }
 
 // ---------------------------------------------------------------------------
+// Permissions wizard state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct PendingPermissions {
+    /// None while waiting for the admin to type a target user ID.
+    pub target_user_id: Option<i64>,
+    /// Project keys currently toggled on.
+    pub selected: HashSet<String>,
+    /// ID of the project-picker message (for in-place keyboard edits). Stored
+    /// as the raw i32 so state.rs stays free of teloxide imports.
+    pub message_id: Option<i32>,
+}
+
+// ---------------------------------------------------------------------------
 // Per-chat state — stored in AppState.chat_states DashMap
 // ---------------------------------------------------------------------------
 
@@ -132,4 +148,7 @@ pub struct ChatState {
 
     /// Pending solve — user chose a repo, now picking branch action
     pub pending_solve: Option<PendingSolve>,
+
+    /// Active /permissions wizard
+    pub pending_permissions: Option<PendingPermissions>,
 }

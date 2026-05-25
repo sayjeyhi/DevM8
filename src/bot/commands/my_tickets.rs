@@ -101,11 +101,43 @@ fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> InlineKey
 }
 
 // ---------------------------------------------------------------------------
+// Project access helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the subset of Jira project keys the user is allowed to see.
+/// If `project_access` is empty or a key has no entry, all allowed users can see it.
+pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
+    let is_admin = state.config.telegram.admin_user_id == Some(user_id);
+    let access = state.project_access.read().unwrap();
+
+    state
+        .jira
+        .project_keys()
+        .into_iter()
+        .filter(|key| {
+            if is_admin || access.is_empty() {
+                return true;
+            }
+            match access.get(key.as_str()) {
+                None => true,
+                Some(ids) => ids.contains(&user_id),
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Main command entry
 // ---------------------------------------------------------------------------
 
-pub async fn handle_my_tickets(bot: Bot, msg: Message, state: Arc<AppState>) -> Result<()> {
-    let project_keys = state.jira.project_keys();
+pub async fn handle_my_tickets(
+    bot: Bot,
+    msg: Message,
+    state: Arc<AppState>,
+    user_id: i64,
+) -> Result<()> {
+    let project_keys = accessible_project_keys(user_id, &state);
 
     if project_keys.is_empty() {
         bot.send_message(msg.chat.id, "No project keys configured.")

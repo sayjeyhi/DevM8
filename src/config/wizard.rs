@@ -97,10 +97,16 @@ fn collect_telegram(existing: Option<&TelegramConfig>) -> Result<TelegramConfig,
         .and_then(|c| c.admin_user_id)
         .or_else(|| allowed_user_ids.first().copied());
 
+    // Preserve per-project access rules; configure manually in the TOML file.
+    let project_access = existing
+        .map(|c| c.project_access.clone())
+        .unwrap_or_default();
+
     Ok(TelegramConfig {
         bot_token,
         allowed_user_ids,
         admin_user_id,
+        project_access,
     })
 }
 
