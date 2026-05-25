@@ -79,7 +79,7 @@ pub async fn handle_permissions_user_input(
             .collect()
     };
 
-    let keyboard = build_keyboard(&all_projects, &current_selected);
+    let keyboard = build_keyboard(&state, &current_selected);
 
     let sent = bot
         .send_message(
@@ -139,8 +139,7 @@ pub async fn handle_permissions_toggle(
         (perm.target_user_id, perm.selected.clone(), perm.message_id)
     };
 
-    let all_projects = all_project_keys(&state);
-    let keyboard = build_keyboard(&all_projects, &new_selected);
+    let keyboard = build_keyboard(&state, &new_selected);
 
     if let (Some(msg_id), Some(_)) = (message_id, target_user_id) {
         let _ = bot
@@ -250,6 +249,20 @@ pub async fn handle_permissions_done(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Sorted Jira project keys.
+pub fn jira_project_keys(state: &AppState) -> Vec<String> {
+    let mut keys: Vec<String> = state.config.jira.project_keys.clone();
+    keys.sort();
+    keys
+}
+
+/// Sorted git project keys (from git_map).
+pub fn git_project_keys(state: &AppState) -> Vec<String> {
+    let mut keys: Vec<String> = state.git_map.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
 /// Union of Jira project keys and git_map keys, sorted.
 pub fn all_project_keys(state: &AppState) -> Vec<String> {
     let mut keys: HashSet<String> = state.config.jira.project_keys.iter().cloned().collect();
@@ -261,21 +274,47 @@ pub fn all_project_keys(state: &AppState) -> Vec<String> {
     sorted
 }
 
-fn build_keyboard(all_projects: &[String], selected: &HashSet<String>) -> InlineKeyboardMarkup {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = all_projects
-        .iter()
-        .map(|key| {
+fn build_keyboard(state: &AppState, selected: &HashSet<String>) -> InlineKeyboardMarkup {
+    let jira_keys = jira_project_keys(state);
+    let git_keys = git_project_keys(state);
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+
+    if !jira_keys.is_empty() {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "── 📋 Jira projects ──",
+            "perms:noop",
+        )]);
+        for key in &jira_keys {
             let label = if selected.contains(key) {
                 format!("✅ {}", key)
             } else {
                 format!("⬜ {}", key)
             };
-            vec![InlineKeyboardButton::callback(
+            rows.push(vec![InlineKeyboardButton::callback(
                 label,
                 format!("perms:toggle:{}", key),
-            )]
-        })
-        .collect();
+            )]);
+        }
+    }
+
+    if !git_keys.is_empty() {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "── 📁 Git projects ──",
+            "perms:noop",
+        )]);
+        for key in &git_keys {
+            let label = if selected.contains(key) {
+                format!("✅ {}", key)
+            } else {
+                format!("⬜ {}", key)
+            };
+            rows.push(vec![InlineKeyboardButton::callback(
+                label,
+                format!("perms:toggle:{}", key),
+            )]);
+        }
+    }
 
     rows.push(vec![InlineKeyboardButton::callback("✔ Done", "perms:done")]);
 
