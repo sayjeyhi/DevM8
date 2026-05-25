@@ -1,6 +1,6 @@
 # DevM8
 
-An AFK tool that lets you manage Tickets from your phone — create, move, comment, and resolve issues without opening a browser.
+A Telegram bot that lets you manage Jira tickets and run AI-assisted dev workflows from your phone — create, move, comment, solve issues, ask Claude questions about your code, and run CLI commands, all without opening a browser or laptop.
 
 ## Install
 
@@ -12,11 +12,11 @@ Prefer to review the script before running:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sayjeyhi/DevM8/main/install.sh -o install.sh
-less install.sh    # review before running
+less install.sh
 bash install.sh
 ```
 
-Pin to a specific release (for reproducible installs):
+Pin to a specific release:
 
 ```bash
 DEV_MATE_VERSION=v1.0.0 curl -fsSL https://raw.githubusercontent.com/sayjeyhi/DevM8/main/install.sh | bash
@@ -24,10 +24,11 @@ DEV_MATE_VERSION=v1.0.0 curl -fsSL https://raw.githubusercontent.com/sayjeyhi/De
 
 The installer:
 - Detects your platform and downloads the correct binary
-- Verifies the checksum against `checksums.txt`
-- Installs to `/usr/local/bin` (or `~/.local/bin` if that is not writable)
+- Verifies the SHA-256 checksum against `checksums.txt`
+- Installs to `/usr/local/bin` (or `~/.local/bin` if not writable)
 - Registers a system service (launchd on macOS, systemd on Linux)
-- Runs a configuration wizard on first install (when no config exists and stdin is a TTY; skipped on re-installs and non-interactive environments)
+- **On Linux:** installs `bubblewrap` for Claude process sandboxing (see [Security](#security))
+- Runs the configuration wizard on first install (skipped in non-interactive environments)
 
 ## Requirements
 
@@ -37,65 +38,135 @@ The installer:
 | macOS 12+ x64 (Intel) | Supported |
 | Linux x64 glibc | Supported |
 | Linux ARM64 | Not supported |
-| Alpine / musl Linux | Not supported — Bun binaries require glibc |
+| Alpine / musl Linux | Not supported |
 | Windows | Not supported |
 
-**Note for M-series Mac users running under Rosetta:** if `uname -m` returns `x86_64`, you will get the x64 binary. It works, but run in a native arm64 shell for best performance.
-
-No runtime is required — the binary is self-contained (compiled with `bun --compile`).
+No runtime required — the binary is self-contained.
 
 **Prerequisites:**
-- A Telegram bot token (create one with [@BotFather](https://t.me/BotFather))
-- A Jira Cloud API token (generate at `https://id.atlassian.com/manage-profile/security/api-tokens`)
+- A Telegram bot token ([@BotFather](https://t.me/BotFather))
+- A Jira Cloud API token (`https://id.atlassian.com/manage-profile/security/api-tokens`)
+- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude login`)
 
 ## Telegram Commands
+
+### Jira
 
 | Command | Description |
 |---|---|
 | `/create` | Create a new Jira issue |
 | `/move` | Move an issue to a different status |
 | `/comment` | Add a comment to an issue |
-| `/solve` | Mark an issue as resolved |
+| `/my_tickets` | Browse your assigned tickets with pagination |
+| `/jira` | Interactive Jira panel (create, move, comment, solve from one menu) |
+
+### Claude / AI
+
+| Command | Description |
+|---|---|
+| `/ask` | Ask Claude a question about a repo, or run a CLI command inside the sandbox |
+| `/solve` | Analyze a Jira ticket with Claude and get implementation steps |
+
+### Admin
+
+| Command | Description |
+|---|---|
+| `/permissions` | Manage which users can access which projects |
+| `/admin` | Admin panel (clone repos, add projects) |
+| `/clone` | Clone a git repository |
+| `/logs` | View recent bot logs |
+| `/status` | Show bot status and config summary |
 | `/help` | List available commands |
 
 ## Config File
 
 **Location:** `~/.config/devm8/config.toml`
 
-The install script runs a configuration wizard on first install. For non-interactive environments (piped `curl | bash`), the wizard is skipped and you are prompted to run `devm8 config` to complete setup.
+Run `devm8 config` to launch the interactive wizard at any time.
 
 ```toml
 [telegram]
 bot_token = "YOUR_TELEGRAM_BOT_TOKEN"
+
+# Users allowed to use the bot. If empty, all users are allowed.
 allowed_user_ids = [123456789]
 
+# Only this user can run admin commands (/permissions, /admin, /logs, /clone).
+admin_user_id = 123456789
+
+# Per-project access control: project key -> list of allowed user IDs.
+# Users listed here but NOT in allowed_user_ids are restricted to only their granted projects.
+# If a project key is absent, all allowed_user_ids can access it.
+[telegram.project_access]
+PROJ = [111111111, 222222222]
+BZ   = [111111111]
+
 [jira]
-base_url = "https://yourcompany.atlassian.net"
-email = "you@example.com"
-api_token = "YOUR_JIRA_API_TOKEN"
+base_url     = "https://yourcompany.atlassian.net"
+email        = "you@example.com"
+api_token    = "YOUR_JIRA_API_TOKEN"
 project_keys = ["PROJ", "BZ"]
 
 [claude]
 binary_path = "/usr/local/bin/claude"
-# api_key = "sk-ant-..."   # optional if already logged in via `claude login`
+# api_key = "sk-ant-..."   # optional if already authenticated via `claude login`
+# sandbox = true           # default: true on Linux, false on macOS (see Security)
+# timeout_ms = 300000
 
-# Per-project repo paths for /solve — omit a project to disable solve for it.
-# Each project can have multiple repos (comma-separated in the wizard).
+# Per-project repo paths for /ask and /solve.
 [repos]
 PROJ = ["/home/you/code/myrepo"]
 BZ   = ["/home/you/code/blaze", "/home/you/code/blaze-infra"]
+
+# Optional Slack integration
+[slack]
+user_token       = "xoxp-..."
+poll_interval_ms = 30000
 
 [app]
 log_level = "info"  # info | debug | error
 ```
 
-The config file is created with `chmod 600` (user-read-only) by the configuration wizard.
+## Permission Management
 
-To reconfigure at any time:
+The `/permissions` command opens an interactive menu for the admin to control project-level access:
 
-```bash
-devm8 config
-```
+- **Add a user** by Telegram user ID
+- **Toggle project access** per user — Jira projects and git repos shown separately
+- **Revoke all access** for a user in one tap
+- Changes persist to the config file immediately
+
+Access rules:
+- Users in `allowed_user_ids` have unrestricted access to all projects.
+- Users added only via `/permissions` (in `project_access`) are restricted to exactly the projects granted to them — they cannot access other projects via any command.
+- The admin (`admin_user_id`) always has full access regardless of `project_access`.
+
+## Security
+
+On Linux, every Claude subprocess and CLI command run via `/ask` is isolated with **bubblewrap** (`bwrap`), a lightweight Linux namespace sandbox. The install script installs it automatically.
+
+### What the sandbox enforces
+
+Each Claude or shell invocation runs in a fresh namespace:
+
+| Resource | Inside sandbox |
+|---|---|
+| Project directory | Mounted read-write at `/tmp/workspace` |
+| `~/.claude` (auth token) | Mounted read-only |
+| All other home dirs | Replaced with empty tmpfs — SSH keys, credentials, other projects invisible |
+| `/root` | Replaced with empty tmpfs |
+| System binaries / libs | Mounted read-only (needed for Claude to run) |
+| Environment variables | Cleared — only `HOME`, `PATH`, `TMPDIR`, `ANTHROPIC_API_KEY` re-injected |
+| Network | Unrestricted — Claude must reach the Anthropic API |
+| PID / UTS / IPC namespaces | Isolated |
+
+### Result
+
+A user with access to project A cannot use `/ask` or a CLI command to read project B, `~/.ssh`, `.env` files, database credentials, or any path outside their granted project directory.
+
+### Disabling the sandbox
+
+Set `claude.sandbox = false` in the config to disable sandboxing (useful for debugging). On macOS, sandboxing is always off.
 
 ## Uninstall
 
@@ -103,17 +174,15 @@ devm8 config
 curl -fsSL https://raw.githubusercontent.com/sayjeyhi/DevM8/main/install.sh | bash -s -- --uninstall
 ```
 
-The uninstall command:
-- Stops and removes the service (launchd on macOS, systemd on Linux)
+- Stops and removes the service
 - Removes the binary from `/usr/local/bin` or `~/.local/bin`
-- Does **not** remove config files at `~/.config/devm8/` — remove those manually if desired
-- Does **not** clean up PATH entries added to shell RC files — remove those manually
+- Config files at `~/.config/devm8/` are left in place — remove manually if desired
 
 ## macOS Gatekeeper (Manual Downloads Only)
 
-> This step is **not needed** when using the install script above — the script strips the quarantine attribute automatically.
+> Not needed when using the install script — it strips the quarantine attribute automatically.
 
-If you download a binary manually from the [GitHub Releases](https://github.com/sayjeyhi/DevM8/releases) page, macOS may block it. To remove the quarantine flag:
+If you download a binary manually from the [Releases](https://github.com/sayjeyhi/DevM8/releases) page:
 
 ```bash
 xattr -d com.apple.quarantine /usr/local/bin/devm8
@@ -121,33 +190,28 @@ xattr -d com.apple.quarantine /usr/local/bin/devm8
 
 ## Linux: Start at Boot Without Login
 
-By default, systemd user services only run while an active session exists. To start the bot at system boot even when no user is logged in (optional):
+By default, systemd user services only run while an active session exists. To start at system boot without a login:
 
 ```bash
 loginctl enable-linger $USER
 ```
 
-This may require sudo on some systems. The install script does not run this automatically — it only prints an advisory message.
-
-## Checksum Verification
-
-The install script downloads `checksums.txt` from the same GitHub Release and verifies the binary's SHA-256 hash before installing. This guards against accidental download corruption or truncation.
-
-**Limitation:** Both the binary and `checksums.txt` are served from the same GitHub Release. A compromised release would serve both files, making this a corruption guard rather than a tamper-proof guarantee. Users who require stronger verification should build from source. GPG signing is not currently implemented.
+This may require sudo on some systems. The install script prints an advisory but does not run this automatically.
 
 ## Build from Source
 
-Requires **Bun v1.3.11** (pin this version — v1.3.12 has a regression that produces invalid macOS ARM64 code signatures).
+Requires the [Rust toolchain](https://rustup.rs/).
 
 ```bash
 git clone https://github.com/sayjeyhi/DevM8.git
 cd DevM8
-bun install
-# Build for your current platform:
-bun build --compile src/index.ts --outfile devm8
+cargo build --release
+# Binary at: target/release/devm8
 ```
 
-For cross-compilation targets, refer to the CI workflow matrix (`darwin-arm64`, `darwin-x64`, `linux-x64`) which uses the corresponding `--target=bun-<target>` flags.
+## Checksum Verification
+
+The install script downloads `checksums.txt` from the same GitHub Release and verifies the SHA-256 hash before installing. This guards against download corruption. Both files are served from the same release, so this is a corruption guard rather than a tamper-proof guarantee. Users requiring stronger verification should build from source.
 
 ## License
 

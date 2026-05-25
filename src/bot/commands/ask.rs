@@ -1048,7 +1048,13 @@ pub async fn handle_ask_session_callback(
 
             let cwd_hint = repo_path
                 .as_ref()
-                .map(|p| format!(" (cwd: <code>{}</code>)", escape_html(&p.to_string_lossy())))
+                .and_then(|p| p.file_name())
+                .map(|name| {
+                    format!(
+                        " (in <code>{}</code>)",
+                        escape_html(&name.to_string_lossy())
+                    )
+                })
                 .unwrap_or_default();
             bot.send_message(chat_id, format!("Enter the command to run{}:", cwd_hint))
                 .parse_mode(ParseMode::Html)

@@ -18,6 +18,48 @@ const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 const PROGRESS_INTERVAL_MS: u64 = 2_000;
 const SIGTERM_GRACE_MS: u64 = 2_000;
 
+/// Bind-mount a path (and its canonical symlink target) that lives under /home back into a
+/// bwrap sandbox. Necessary because build_bwrap_base overlays /home with an empty tmpfs.
+///
+/// Strategy: for each path under /home, bind the first dotdir under ~/  (e.g. ~/.local,
+/// ~/.nvm) so that the binary AND its runtime deps (node, npm packages) remain accessible.
+#[cfg(target_os = "linux")]
+fn bind_home_subtree(cmd: &mut Command, path_str: &str) {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    let path = Path::new(path_str);
+    let real_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut bound: HashSet<String> = HashSet::new();
+
+    for p in [path.to_path_buf(), real_path] {
+        if !p.starts_with("/home") {
+            continue;
+        }
+        let mut comps = p.components();
+        let _ = comps.next(); // RootDir  "/"
+        let _ = comps.next(); // "home"
+        let Some(user) = comps.next() else { continue };
+        let Some(dotdir) = comps.next() else { continue };
+
+        let user_dir = Path::new("/home").join(user.as_os_str());
+        let mount_root = user_dir.join(dotdir.as_os_str());
+
+        if !mount_root.exists() {
+            continue;
+        }
+        let mount_str = mount_root.to_string_lossy().into_owned();
+        if !bound.insert(mount_str.clone()) {
+            continue;
+        }
+
+        // Create parent dir inside sandbox tmpfs, then bind the subtree read-only.
+        cmd.args(["--dir", &*user_dir.to_string_lossy()]);
+        cmd.args(["--ro-bind", &mount_str, &mount_str]);
+    }
+}
+
 pub struct ClaudeClient {
     config: ClaudeClientConfig,
     logger: Arc<dyn Logger>,
@@ -105,6 +147,9 @@ impl ClaudeClient {
     #[cfg(target_os = "linux")]
     fn build_bwrap_command(&self, opts: &AskOptions) -> Command {
         let mut cmd = self.build_bwrap_base(opts.cwd.as_deref());
+        // Re-bind the claude binary (and its symlink target) into the sandbox.
+        // build_bwrap_base overlays /home with tmpfs, hiding any binary installed there.
+        bind_home_subtree(&mut cmd, &self.config.binary_path);
         cmd.arg(&self.config.binary_path);
         cmd.args([
             "--print",
