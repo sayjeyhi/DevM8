@@ -1,3 +1,5 @@
+pub mod add_project_cmd;
+pub mod clone_cmd;
 pub mod config_cmd;
 pub mod daemon_cmd;
 pub mod logs_cmd;
@@ -7,6 +9,8 @@ pub mod status_cmd;
 pub mod stop_cmd;
 pub mod update_cmd;
 
+pub use add_project_cmd::add_project_command;
+pub use clone_cmd::clone_command;
 pub use config_cmd::config_command;
 pub use daemon_cmd::daemon_command;
 pub use logs_cmd::logs_command;

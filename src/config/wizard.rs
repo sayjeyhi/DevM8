@@ -26,7 +26,10 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
     let telegram = collect_telegram(existing.map(|c| &c.telegram))?;
     let jira = collect_jira(existing.map(|c| &c.jira))?;
     let claude = collect_claude(existing.map(|c| &c.claude))?;
-    let repos = collect_repos(&jira.project_keys, existing.and_then(|c| c.repos.as_ref()))?;
+    let projects = collect_projects(
+        &jira.project_keys,
+        existing.and_then(|c| c.projects.as_ref()),
+    )?;
     let app = collect_app_settings(existing.map(|c| &c.app))?;
     let slack = collect_slack(existing.and_then(|c| c.slack.as_ref()))?;
 
@@ -36,7 +39,11 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
         telegram,
         jira,
         claude,
-        repos: if repos.is_empty() { None } else { Some(repos) },
+        projects: if projects.is_empty() {
+            None
+        } else {
+            Some(projects)
+        },
         app,
         slack,
     })
@@ -85,9 +92,21 @@ fn collect_telegram(existing: Option<&TelegramConfig>) -> Result<TelegramConfig,
 
     let allowed_user_ids = parse_ids(&allowed_user_ids_raw);
 
+    // Keep existing admin if re-running wizard; otherwise default to first allowed user.
+    let admin_user_id = existing
+        .and_then(|c| c.admin_user_id)
+        .or_else(|| allowed_user_ids.first().copied());
+
+    // Preserve per-project access rules; configure manually in the TOML file.
+    let project_access = existing
+        .map(|c| c.project_access.clone())
+        .unwrap_or_default();
+
     Ok(TelegramConfig {
         bot_token,
         allowed_user_ids,
+        admin_user_id,
+        project_access,
     })
 }
 
@@ -255,7 +274,7 @@ fn collect_claude(existing: Option<&ClaudeConfig>) -> Result<ClaudeConfig, AppEr
     })
 }
 
-fn collect_repos(
+fn collect_projects(
     project_keys: &[String],
     existing: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<HashMap<String, Vec<String>>, AppError> {
@@ -263,18 +282,18 @@ fn collect_repos(
         return Ok(HashMap::new());
     }
 
-    println!("--- Repository paths per project ---");
+    println!("--- Project paths ---");
 
-    let configure = Confirm::new("Configure repository paths for project keys?")
+    let configure = Confirm::new("Configure local repository paths for project keys?")
         .with_default(existing.is_some())
         .prompt()
-        .map_err(|e| prompt_err("repos", e))?;
+        .map_err(|e| prompt_err("projects", e))?;
 
     if !configure {
         return Ok(existing.cloned().unwrap_or_default());
     }
 
-    let mut repos = HashMap::new();
+    let mut projects = HashMap::new();
 
     for key in project_keys {
         let default_paths = existing
@@ -295,7 +314,7 @@ fn collect_repos(
                 .unwrap_or(inquire::validator::Validation::Valid))
         })
         .prompt()
-        .map_err(|e| prompt_err("repos", e))?;
+        .map_err(|e| prompt_err("projects", e))?;
 
         if !raw.trim().is_empty() {
             let paths: Vec<String> = raw
@@ -303,11 +322,11 @@ fn collect_repos(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            repos.insert(key.clone(), paths);
+            projects.insert(key.clone(), paths);
         }
     }
 
-    Ok(repos)
+    Ok(projects)
 }
 
 fn collect_app_settings(existing: Option<&AppSettings>) -> Result<AppSettings, AppError> {

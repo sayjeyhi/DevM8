@@ -23,6 +23,13 @@ pub struct TelegramConfig {
     pub bot_token: String,
     #[serde(default)]
     pub allowed_user_ids: Vec<i64>,
+    /// Single admin user ID. Only this user can run add_project, logs, clone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_user_id: Option<i64>,
+    /// Per-project access: project key → list of allowed user IDs.
+    /// If a project key is absent, all allowed_user_ids can access it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub project_access: HashMap<String, Vec<i64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,8 +120,8 @@ pub struct AppConfig {
     pub claude: ClaudeConfig,
 
     /// Map from PROJECT_KEY → list of repo paths
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repos: Option<HashMap<String, Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "repos")]
+    pub projects: Option<HashMap<String, Vec<String>>>,
 
     #[serde(default)]
     pub app: AppSettings,

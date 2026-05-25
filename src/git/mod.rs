@@ -102,6 +102,50 @@ impl GitClient {
         self.run(&["diff", "HEAD", "--stat"]).await
     }
 
+    /// Count of files with uncommitted changes (staged + unstaged).
+    pub async fn changed_files_count(&self) -> usize {
+        let Ok(out) = self.exec(&["status", "--porcelain"]).await else {
+            return 0;
+        };
+        out.stdout.lines().filter(|l| !l.trim().is_empty()).count()
+    }
+
+    /// Number of local commits not yet pushed to the upstream branch.
+    /// Returns 0 when no upstream is configured.
+    pub async fn commits_ahead(&self) -> usize {
+        let out = self
+            .exec(&["rev-list", "--count", "@{u}..HEAD"])
+            .await
+            .unwrap_or_else(|_| GitOutput {
+                stdout: "0".into(),
+                stderr: String::new(),
+                exit_code: 1,
+            });
+        if out.exit_code == 0 {
+            out.stdout.trim().parse().unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Number of upstream commits not yet pulled locally.
+    /// Returns 0 when no upstream is configured or not yet fetched.
+    pub async fn commits_behind(&self) -> usize {
+        let out = self
+            .exec(&["rev-list", "--count", "HEAD..@{u}"])
+            .await
+            .unwrap_or_else(|_| GitOutput {
+                stdout: "0".into(),
+                stderr: String::new(),
+                exit_code: 1,
+            });
+        if out.exit_code == 0 {
+            out.stdout.trim().parse().unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     /// Stage all changes (`git add .`).
     pub async fn stage_all(&self) -> Result<()> {
         self.run(&["add", "."]).await?;

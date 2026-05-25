@@ -28,8 +28,11 @@ pub async fn create_slack_forward_handler(
     );
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("Reply", format!("slack:reply:{}:{}", channel_id, ts)),
-        InlineKeyboardButton::callback("Answer with AI", format!("slack:ai:{}:{}", channel_id, ts)),
+        InlineKeyboardButton::callback("↩️ Reply", format!("slack:reply:{}:{}", channel_id, ts)),
+        InlineKeyboardButton::callback(
+            "🤖 Answer with AI",
+            format!("slack:ai:{}:{}", channel_id, ts),
+        ),
     ]]);
 
     for user_id in &allowed_user_ids {
@@ -188,15 +191,15 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
 
                             let keyboard = InlineKeyboardMarkup::new(vec![vec![
                                 InlineKeyboardButton::callback(
-                                    "Send",
+                                    "📤 Send",
                                     format!("slack:send:{}:{}", channel_id, ts),
                                 ),
                                 InlineKeyboardButton::callback(
-                                    "Edit",
+                                    "✏️ Edit",
                                     format!("slack:edit:{}:{}", channel_id, ts),
                                 ),
                                 InlineKeyboardButton::callback(
-                                    "Cancel",
+                                    "❌ Cancel",
                                     format!("slack:cancel:{}:{}", channel_id, ts),
                                 ),
                             ]]);

@@ -111,6 +111,25 @@ pub fn find_daemon_pids() -> Vec<u32> {
     pids
 }
 
+/// Send SIGHUP to the daemon process recorded in the PID file, asking it to
+/// reload its configuration.  Silently does nothing if the daemon is not
+/// running or the platform does not support SIGHUP.
+pub fn signal_daemon_reload() {
+    #[cfg(unix)]
+    {
+        let pid_path = PATHS.pid_file.clone();
+        if let Ok(content) = std::fs::read_to_string(&pid_path) {
+            if let Ok(pid) = content.trim().parse::<u32>() {
+                if is_process_running(pid) {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-HUP", &pid.to_string()])
+                        .status();
+                }
+            }
+        }
+    }
+}
+
 /// Send SIGTERM to every running `devm8 daemon` process. Returns number killed.
 #[cfg(target_os = "linux")]
 pub fn kill_all_daemons() -> usize {

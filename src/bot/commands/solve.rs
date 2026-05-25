@@ -286,11 +286,11 @@ pub async fn handle_branch_picker(bot: Bot, chat_id: ChatId, state: Arc<AppState
 
     let mut buttons: Vec<Vec<InlineKeyboardButton>> = vec![
         vec![InlineKeyboardButton::callback(
-            "New branch (from main)".to_string(),
+            "🌿 New branch (from main)".to_string(),
             format!("solve:branch:new:{}", issue_key),
         )],
         vec![InlineKeyboardButton::callback(
-            "Stay on current branch",
+            "📌 Stay on current branch",
             format!("solve:branch:curr:{}", issue_key),
         )],
     ];
@@ -299,7 +299,7 @@ pub async fn handle_branch_picker(bot: Bot, chat_id: ChatId, state: Arc<AppState
         buttons.insert(
             0,
             vec![InlineKeyboardButton::callback(
-                "Stash changes & new branch",
+                "📦 Stash changes & new branch",
                 format!("solve:branch:stash:{}", issue_key),
             )],
         );

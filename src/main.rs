@@ -57,6 +57,32 @@ enum Cmd {
     /// Configure Slack integration
     Slackmap,
 
+    /// Clone a repository via SSH
+    Clone {
+        /// SSH repository URL (e.g. git@github.com:org/repo.git)
+        #[arg(value_name = "URL")]
+        url_pos: Option<String>,
+
+        /// SSH repository URL (alternative to positional)
+        #[arg(short = 'u', long, value_name = "URL", hide = true)]
+        url: Option<String>,
+
+        /// Destination parent directory (repo subfolder is created automatically)
+        #[arg(short = 'p', long)]
+        path: Option<String>,
+    },
+
+    /// Add a local git repository as a project
+    AddProject {
+        /// Path to the local git repository
+        #[arg(short = 'p', long)]
+        path: Option<String>,
+
+        /// Jira project key to associate with this repository (e.g. MYAPP)
+        #[arg(short = 'k', long)]
+        key: Option<String>,
+    },
+
     /// Print version
     Version,
 }
@@ -75,6 +101,10 @@ async fn main() {
             Cmd::Config => commands::config_command().await?,
             Cmd::Update => commands::update_command().await?,
             Cmd::Slackmap => commands::slackmap_command().await?,
+            Cmd::Clone { url_pos, url, path } => {
+                commands::clone_command(url_pos.or(url), path).await?
+            }
+            Cmd::AddProject { path, key } => commands::add_project_command(path, key).await?,
             Cmd::Version => println!("{}", env!("DEVM8_VERSION")),
         }
         Ok(())

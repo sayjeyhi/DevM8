@@ -62,3 +62,17 @@ impl Default for Paths {
 
 /// Global lazy constant — use `PATHS.config_file` etc.
 pub static PATHS: std::sync::LazyLock<Paths> = std::sync::LazyLock::new(Paths::new);
+
+/// Expand a leading `~/` or bare `~` to the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
+        }
+    } else if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home.to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}

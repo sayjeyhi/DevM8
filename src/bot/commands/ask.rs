@@ -14,13 +14,22 @@ use crate::claude::types::AskOptions;
 // Prompt builder
 // ---------------------------------------------------------------------------
 
+const TELEGRAM_SYSTEM_PREFIX: &str = "\
+[Context: You are responding inside a Telegram bot. Your text reply is the ONLY output the \
+user sees — there is no terminal or separate display. Rules:\
+\n- When you run a command or read a file, ALWAYS include the actual output verbatim in your \
+reply. Never say it was \"shown\", \"displayed\", or \"listed above\".\
+\n- Format code/output in markdown code blocks so it renders cleanly.\
+\n- Keep replies concise but complete — do not truncate data the user asked for.]\
+\n\n---\n\n";
+
 fn build_prompt(question: &str, history: &[HistoryEntry], context: Option<&str>) -> String {
     let context_prefix = context
         .map(|c| format!("{}\n\n---\n\n", c))
         .unwrap_or_default();
 
     if history.is_empty() {
-        return format!("{}{}", context_prefix, question);
+        return format!("{}{}{}", TELEGRAM_SYSTEM_PREFIX, context_prefix, question);
     }
     let turns = history
         .iter()
@@ -35,8 +44,8 @@ fn build_prompt(question: &str, history: &[HistoryEntry], context: Option<&str>)
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(
-        "{}This is a continuing conversation. Previous exchanges:\n\n{}\n\nUser: {}",
-        context_prefix, turns, question
+        "{}{}This is a continuing conversation. Previous exchanges:\n\n{}\n\nUser: {}",
+        TELEGRAM_SYSTEM_PREFIX, context_prefix, turns, question
     )
 }
 
@@ -51,11 +60,10 @@ async fn send_repo_ready_message(
     repo_name: &str,
     git: &Arc<crate::git::GitClient>,
 ) -> Result<()> {
-    let branch = git
-        .current_branch()
-        .await
-        .unwrap_or_else(|_| "unknown".into());
-    let clean = git.is_clean().await.unwrap_or(true);
+    let (branch, clean, behind) =
+        tokio::join!(git.current_branch(), git.is_clean(), git.commits_behind(),);
+    let branch = branch.unwrap_or_else(|_| "unknown".into());
+    let clean = clean.unwrap_or(true);
     let status_icon = if clean { "✅ clean" } else { "⚠️ dirty" };
 
     let text = format!(
@@ -66,10 +74,14 @@ async fn send_repo_ready_message(
         status_icon,
     );
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "Pull latest",
-        "ask:pull_latest",
-    )]]);
+    let pull_label = format!("⬇️ Pull latest ({} behind)", behind);
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+            pull_label,
+            "ask:pull_latest",
+        )],
+        vec![InlineKeyboardButton::callback("💻 CLI", "ask:cli")],
+    ]);
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
@@ -83,25 +95,48 @@ async fn send_repo_ready_message(
 // Session keyboard
 // ---------------------------------------------------------------------------
 
-fn session_keyboard(pushed: bool) -> InlineKeyboardMarkup {
+async fn session_keyboard(
+    pushed: bool,
+    git: Option<&Arc<crate::git::GitClient>>,
+) -> InlineKeyboardMarkup {
+    let (commit_label, push_label, pull_label) = if let Some(g) = git {
+        let (changed, ahead, behind) = tokio::join!(
+            g.changed_files_count(),
+            g.commits_ahead(),
+            g.commits_behind()
+        );
+        (
+            format!("✅ Commit ({} changed)", changed),
+            format!("🚀 Push ({} ahead)", ahead),
+            format!("⬇️ Pull ({} behind)", behind),
+        )
+    } else {
+        (
+            "✅ Commit".to_string(),
+            "🚀 Push".to_string(),
+            "⬇️ Pull".to_string(),
+        )
+    };
+
     let mut rows: Vec<Vec<InlineKeyboardButton>> = vec![
         vec![
-            InlineKeyboardButton::callback("Follow up", "ask:followup"),
-            InlineKeyboardButton::callback("Branch", "ask:branch"),
+            InlineKeyboardButton::callback("💬 Follow up", "ask:followup"),
+            InlineKeyboardButton::callback("💻 CLI", "ask:cli"),
         ],
         vec![
-            InlineKeyboardButton::callback("Commit", "ask:commit"),
-            InlineKeyboardButton::callback("Push", "ask:push"),
+            InlineKeyboardButton::callback("🌿 Branch", "ask:branch"),
+            InlineKeyboardButton::callback(commit_label, "ask:commit"),
         ],
         vec![
-            InlineKeyboardButton::callback("Pull", "ask:pull"),
-            InlineKeyboardButton::callback("End session", "ask:end"),
+            InlineKeyboardButton::callback(push_label, "ask:push"),
+            InlineKeyboardButton::callback(pull_label, "ask:pull"),
         ],
+        vec![InlineKeyboardButton::callback("🔚 End session", "ask:end")],
     ];
 
     if pushed {
         rows.push(vec![InlineKeyboardButton::callback(
-            "Open PR",
+            "🔀 Open PR",
             "ask:openpr",
         )]);
     }
@@ -229,7 +264,7 @@ pub async fn ask_with_session(
     }
 
     // Show "What next?" keyboard
-    let keyboard = session_keyboard(pushed);
+    let keyboard = session_keyboard(pushed, git_opt.as_ref()).await;
     bot.send_message(chat_id, "What would you like to do next?")
         .reply_markup(keyboard)
         .await?;
@@ -257,7 +292,7 @@ pub async fn handle_ask(bot: Bot, msg: Message, state: Arc<AppState>, args: Stri
         .collect();
 
     if all_repos.is_empty() {
-        // No repos — ask without git context
+        // No projects configured — ask without git context
         let pending = PendingAsk {
             repo_path: None,
             git: None,
@@ -321,7 +356,7 @@ pub async fn handle_ask(bot: Bot, msg: Message, state: Arc<AppState>, args: Stri
         return ask_with_session(bot, msg.chat.id, state, question).await;
     }
 
-    // Multiple repos — show picker
+    // Multiple projects — show picker
     let buttons: Vec<Vec<InlineKeyboardButton>> = all_repos
         .iter()
         .enumerate()
@@ -358,7 +393,7 @@ pub async fn handle_ask(bot: Bot, msg: Message, state: Arc<AppState>, args: Stri
     }
 
     let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(msg.chat.id, "Select a repository:")
+    bot.send_message(msg.chat.id, "Select a project:")
         .reply_markup(keyboard)
         .await?;
 
@@ -461,8 +496,13 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
                         state
                             .logger
                             .error(&format!("ask: commit failed: {e}"), None);
-                        bot.send_message(msg.chat.id, format!("Commit failed: {e}"))
-                            .await?;
+                        bot.send_message(
+                            msg.chat.id,
+                            format!("Commit failed: {e}\n\nSend commit message again to retry:"),
+                        )
+                        .await?;
+                        // Keep pending_ask so the user can retry
+                        return Ok(());
                     }
                 }
             } else {
@@ -474,6 +514,95 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
                 let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
                 entry.pending_ask = None;
             }
+        }
+
+        Some(AskMode::Cli) => {
+            {
+                let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
+                entry.pending_ask = None;
+            }
+
+            let cwd = pending
+                .repo_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string());
+
+            state.logger.info(
+                "ask: running cli command",
+                Some(&json!({ "cmd": &text, "cwd": cwd.as_deref().unwrap_or("(default)") })),
+            );
+
+            let status_msg = bot
+                .send_message(
+                    msg.chat.id,
+                    format!("Running: <code>{}</code>…", escape_html(&text)),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.args(["-c", &text]);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            if let Some(ref dir) = cwd {
+                cmd.current_dir(dir);
+            }
+
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(60), cmd.output()).await;
+
+            bot.delete_message(msg.chat.id, status_msg.id).await.ok();
+
+            let reply = match output {
+                Err(_) => "Command timed out after 60 seconds.".to_string(),
+                Ok(Err(e)) => format!("Failed to spawn: {e}"),
+                Ok(Ok(o)) => {
+                    let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                    let exit_code = o.status.code().unwrap_or(-1);
+
+                    let mut parts: Vec<String> = Vec::new();
+                    parts.push(format!(
+                        "<b>$</b> <code>{}</code>  (exit {})",
+                        escape_html(&text),
+                        exit_code
+                    ));
+                    if !stdout.trim().is_empty() {
+                        parts.push(format!("<pre>{}</pre>", escape_html(stdout.trim())));
+                    }
+                    if !stderr.trim().is_empty() {
+                        parts.push(format!(
+                            "<b>stderr:</b>\n<pre>{}</pre>",
+                            escape_html(stderr.trim())
+                        ));
+                    }
+                    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+                        parts.push("(no output)".to_string());
+                    }
+                    parts.join("\n")
+                }
+            };
+
+            let chunks = split_message(&reply, 4096);
+            for chunk in &chunks {
+                bot.send_message(msg.chat.id, chunk)
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+
+            // Show session keyboard so user can continue
+            let (pushed, git) = {
+                let cs = state.chat_states.get(&msg.chat.id.0);
+                let pushed = cs
+                    .as_ref()
+                    .and_then(|cs| cs.ask_session.as_ref().map(|s| s.pushed))
+                    .unwrap_or(false);
+                let git = cs.and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
+                (pushed, git)
+            };
+            bot.send_message(msg.chat.id, "What would you like to do next?")
+                .reply_markup(session_keyboard(pushed, git.as_ref()).await)
+                .await?;
         }
 
         Some(AskMode::Followup) | None => {
@@ -653,8 +782,8 @@ pub async fn handle_ask_session_callback(
                 if !is_clean {
                     // Ask to stash or keep
                     let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::callback("Stash first", "ask:branch_stash"),
-                        InlineKeyboardButton::callback("Keep changes", "ask:branch_keep"),
+                        InlineKeyboardButton::callback("📦 Stash first", "ask:branch_stash"),
+                        InlineKeyboardButton::callback("📌 Keep changes", "ask:branch_keep"),
                     ]]);
                     bot.send_message(chat_id, "Working tree is dirty. Stash or keep changes?")
                         .reply_markup(keyboard)
@@ -760,6 +889,7 @@ pub async fn handle_ask_session_callback(
                 );
 
                 let commit_cwd = g.repo_path.to_string_lossy().to_string();
+                let typing = keep_typing(bot.clone(), chat_id);
                 let suggestion = state
                     .claude
                     .ask(
@@ -771,6 +901,7 @@ pub async fn handle_ask_session_callback(
                     )
                     .await
                     .unwrap_or_default();
+                typing.abort();
 
                 let repo_path = state
                     .chat_states
@@ -832,7 +963,7 @@ pub async fn handle_ask_session_callback(
                         let text = format!("Pushed branch <b>{}</b>.", escape_html(&branch));
                         if !is_main {
                             let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                                InlineKeyboardButton::callback("Open PR", "ask:openpr"),
+                                InlineKeyboardButton::callback("🔀 Open PR", "ask:openpr"),
                             ]]);
                             bot.send_message(chat_id, text)
                                 .parse_mode(ParseMode::Html)
@@ -883,6 +1014,36 @@ pub async fn handle_ask_session_callback(
                 bot.send_message(chat_id, "No git context available.")
                     .await?;
             }
+        }
+
+        "cli" => {
+            let repo_path = state
+                .chat_states
+                .get(&chat_id.0)
+                .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.repo_path.clone()));
+            let git = state
+                .chat_states
+                .get(&chat_id.0)
+                .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
+
+            let pending = PendingAsk {
+                repo_path: repo_path.clone(),
+                git,
+                inline_question: None,
+                mode: Some(AskMode::Cli),
+            };
+            {
+                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                entry.pending_ask = Some(pending);
+            }
+
+            let cwd_hint = repo_path
+                .as_ref()
+                .map(|p| format!(" (cwd: <code>{}</code>)", escape_html(&p.to_string_lossy())))
+                .unwrap_or_default();
+            bot.send_message(chat_id, format!("Enter the command to run{}:", cwd_hint))
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
 
         "end" => {

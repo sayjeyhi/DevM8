@@ -9,6 +9,7 @@ use crate::bot::AppState;
 pub const HELP_TEXT: &str = "\
 <b>DevM8 Commands</b>
 
+<b>Jira</b>
 /create &lt;title&gt; [-- &lt;description&gt;]
   Create a Jira issue. Claude enriches the description if provided.
 
@@ -24,8 +25,20 @@ pub const HELP_TEXT: &str = "\
 /my_tickets
   List your last 10 assigned Jira tickets.
 
+<b>AI</b>
 /ask [question]
   Ask Claude a question about a repository.
+
+<b>Projects</b>
+/clone &lt;ssh_url&gt; &lt;dest_path&gt;
+  Clone a repo via SSH and register it as a project.
+
+/add_project &lt;path&gt; &lt;project_name&gt;
+  Register an existing local git repo as a project.
+
+<b>Daemon</b>
+/status
+  Show daemon state, PID, Jira URL, and registered projects.
 
 /logs [n]
   Show last n daemon log lines (default 50, max 200).
