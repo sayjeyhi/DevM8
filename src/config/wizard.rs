@@ -9,6 +9,7 @@ use inquire::{Confirm, MultiSelect, Select, Text};
 use crate::config::schema::{
     AppConfig, AppSettings, ClaudeConfig, JiraConfig, LogLevel, SlackConfig, TelegramConfig,
 };
+
 use crate::config::validators;
 use crate::shared::errors::AppError;
 
@@ -24,12 +25,13 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
     println!("\n  devm8 configuration wizard\n");
 
     let telegram = collect_telegram(existing.map(|c| &c.telegram))?;
-    let jira = collect_jira(existing.map(|c| &c.jira))?;
+    let jira = collect_jira(existing.and_then(|c| c.jira.as_ref()))?;
     let claude = collect_claude(existing.map(|c| &c.claude))?;
-    let projects = collect_projects(
-        &jira.project_keys,
-        existing.and_then(|c| c.projects.as_ref()),
-    )?;
+    let default_keys: Vec<String> = jira
+        .as_ref()
+        .map(|j| j.project_keys.clone())
+        .unwrap_or_default();
+    let projects = collect_projects(&default_keys, existing.and_then(|c| c.projects.as_ref()))?;
     let app = collect_app_settings(existing.map(|c| &c.app))?;
     let slack = collect_slack(existing.and_then(|c| c.slack.as_ref()))?;
 
@@ -111,8 +113,19 @@ fn collect_telegram(existing: Option<&TelegramConfig>) -> Result<TelegramConfig,
     })
 }
 
-fn collect_jira(existing: Option<&JiraConfig>) -> Result<JiraConfig, AppError> {
-    println!("--- Jira ---");
+fn collect_jira(existing: Option<&JiraConfig>) -> Result<Option<JiraConfig>, AppError> {
+    println!("--- Jira (global, optional) ---");
+
+    let configure = Confirm::new(
+        "Configure a global Jira account? (Users can set their own via /jira in the bot)",
+    )
+    .with_default(existing.is_some())
+    .prompt()
+    .map_err(|e| prompt_err("jira", e))?;
+
+    if !configure {
+        return Ok(None);
+    }
 
     let base_url = Text::new("Jira base URL (e.g. https://yourcompany.atlassian.net):")
         .with_initial_value(existing.map(|c| c.base_url.as_str()).unwrap_or(""))
@@ -144,15 +157,14 @@ fn collect_jira(existing: Option<&JiraConfig>) -> Result<JiraConfig, AppError> {
         .prompt()
         .map_err(|e| prompt_err("jira.email", e))?;
 
-    // Try to fetch project keys from Jira — fall back to manual entry.
     let project_keys = collect_project_keys(&base_url, &api_token, &email, existing)?;
 
-    Ok(JiraConfig {
+    Ok(Some(JiraConfig {
         base_url,
         api_token,
         email,
         project_keys,
-    })
+    }))
 }
 
 fn collect_project_keys(

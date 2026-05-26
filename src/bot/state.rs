@@ -108,6 +108,27 @@ impl PageCache {
 pub struct PendingSolve {
     pub issue_key: String,
     pub git: Option<Arc<GitClient>>,
+    /// True when we're waiting for the user to confirm or type a new branch name.
+    pub awaiting_branch_name: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSolveAction {
+    pub cwd: Option<String>,
+    pub git: Option<Arc<GitClient>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingGrill {
+    pub issue_key: String,
+    /// Pre-formatted "Key / Summary / Status / Description" block passed to every prompt.
+    pub issue_context: String,
+    pub cwd: Option<String>,
+    pub git: Option<Arc<GitClient>>,
+    /// (question, answer) pairs collected so far.
+    pub qa_history: Vec<(String, String)>,
+    /// The question currently being shown to the user.
+    pub current_question: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +211,12 @@ pub struct ChatState {
 
     /// Pending solve — user chose a repo, now picking branch action
     pub pending_solve: Option<PendingSolve>,
+
+    /// Pending solve action — branch is ready, user picking analyze/grill/implement
+    pub pending_solve_action: Option<PendingSolveAction>,
+
+    /// Active grill session — asking user clarifying questions one by one
+    pub pending_grill: Option<PendingGrill>,
 
     /// Active /permissions wizard
     pub pending_permissions: Option<PendingPermissions>,

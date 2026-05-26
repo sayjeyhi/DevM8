@@ -550,11 +550,22 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Sorted Jira project keys.
+/// Sorted Jira project keys — union of global config and all user_jira configs.
 pub fn jira_project_keys(state: &AppState) -> Vec<String> {
-    let mut keys: Vec<String> = state.config.jira.project_keys.clone();
-    keys.sort();
-    keys
+    let mut keys: std::collections::HashSet<String> = state
+        .config
+        .jira
+        .as_ref()
+        .map(|j| j.project_keys.iter().cloned().collect())
+        .unwrap_or_default();
+    for ucfg in state.config.user_jira.values() {
+        for k in &ucfg.project_keys {
+            keys.insert(k.clone());
+        }
+    }
+    let mut sorted: Vec<String> = keys.into_iter().collect();
+    sorted.sort();
+    sorted
 }
 
 /// Sorted git project keys (from git_map).
@@ -566,7 +577,17 @@ pub fn git_project_keys(state: &AppState) -> Vec<String> {
 
 /// Union of Jira project keys and git_map keys, sorted.
 pub fn all_project_keys(state: &AppState) -> Vec<String> {
-    let mut keys: HashSet<String> = state.config.jira.project_keys.iter().cloned().collect();
+    let mut keys: HashSet<String> = state
+        .config
+        .jira
+        .as_ref()
+        .map(|j| j.project_keys.iter().cloned().collect())
+        .unwrap_or_default();
+    for ucfg in state.config.user_jira.values() {
+        for k in &ucfg.project_keys {
+            keys.insert(k.clone());
+        }
+    }
     for k in state.git_map.keys() {
         keys.insert(k.clone());
     }

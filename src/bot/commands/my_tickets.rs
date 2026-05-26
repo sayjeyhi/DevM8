@@ -112,7 +112,10 @@ pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
     let access = state.project_access.read().unwrap();
     let is_restricted = !is_admin && access.values().any(|ids| ids.contains(&user_id));
 
-    let jira = state.jira_for_user(user_id);
+    let jira = match state.jira_for_user(user_id) {
+        Some(j) => j,
+        None => return vec![],
+    };
     jira.project_keys()
         .iter()
         .filter(|key| {
@@ -194,7 +197,15 @@ pub async fn handle_my_tickets_project(
     let status_names: Vec<String> = if !favorite_statuses.is_empty() {
         favorite_statuses
     } else {
-        match state.jira_for_user(user_id).get_statuses().await {
+        let Some(jira) = state.jira_for_user(user_id) else {
+            bot.send_message(
+                chat_id,
+                "Please set up your Jira account first. Use /jira → My Jira.",
+            )
+            .await?;
+            return Ok(());
+        };
+        match jira.get_statuses().await {
             Ok(s) => s.into_iter().map(|s| s.name).collect(),
             Err(e) => {
                 state.logger.error(
@@ -250,8 +261,15 @@ pub async fn handle_my_tickets_status(
         "tickets: querying issues",
         Some(&json!({ "project": project_key, "status": status_filter })),
     );
-    let result = match state
-        .jira_for_user(user_id)
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let result = match jira
         .get_my_issues(PAGE_SIZE, None, filter, Some(project_key))
         .await
     {
@@ -329,8 +347,15 @@ pub async fn handle_my_tickets_page(
 
     let page_token = tokens.get(target_page).and_then(|t| t.as_deref());
 
-    let result = match state
-        .jira_for_user(user_id)
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let result = match jira
         .get_my_issues(
             PAGE_SIZE,
             page_token,
@@ -393,11 +418,15 @@ pub async fn handle_ticket_details(
         "tickets: fetching issue details",
         Some(&json!({ "key": issue_key })),
     );
-    let issue = match state
-        .jira_for_user(user_id)
-        .get_issue_by_key(issue_key)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let issue = match jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
             state.logger.error(
@@ -446,11 +475,15 @@ pub async fn handle_move_start(
     user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
-    let transitions = match state
-        .jira_for_user(user_id)
-        .get_transitions(issue_key)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let transitions = match jira.get_transitions(issue_key).await {
         Ok(t) => t,
         Err(e) => {
             bot.send_message(chat_id, format!("Error fetching transitions: {e}"))
@@ -503,11 +536,15 @@ pub async fn handle_move_execute(
         "tickets: transitioning issue",
         Some(&json!({ "key": issue_key, "target_status": status })),
     );
-    match state
-        .jira_for_user(user_id)
-        .transition_issue(issue_key, status)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    match jira.transition_issue(issue_key, status).await {
         Ok(()) => {
             state.logger.info(
                 "tickets: transition complete",
@@ -577,11 +614,15 @@ pub async fn handle_ticket_ask(
         Some(&json!({ "key": issue_key })),
     );
 
-    let issue = match state
-        .jira_for_user(user_id)
-        .get_issue_by_key(issue_key)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let issue = match jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
             state.logger.error(

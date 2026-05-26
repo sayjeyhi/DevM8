@@ -52,12 +52,14 @@ pub async fn status_command() -> Result<(), AppError> {
 
     let jira_url = config
         .as_ref()
-        .map(|c| c.jira.base_url.as_str())
+        .and_then(|c| c.jira.as_ref())
+        .map(|j| j.base_url.as_str())
         .unwrap_or("-");
 
     let projects = config
         .as_ref()
-        .map(|c| c.jira.project_keys.join(", "))
+        .and_then(|c| c.jira.as_ref())
+        .map(|j| j.project_keys.join(", "))
         .unwrap_or_else(|| "-".to_string());
 
     println!("devm8 status");

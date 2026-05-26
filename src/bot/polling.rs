@@ -12,11 +12,12 @@ use crate::logger::Logger;
 
 use super::commands::{
     ask_with_session, handle_admin, handle_admin_callback, handle_admin_input, handle_ask,
-    handle_ask_session_callback, handle_ask_text_input, handle_help, handle_jira,
-    handle_jira_callback, handle_jira_input, handle_my_tickets_callback, handle_pending_comment,
-    handle_permissions_add, handle_permissions_back, handle_permissions_done,
-    handle_permissions_revoke, handle_permissions_toggle, handle_permissions_user_input,
-    handle_permissions_user_select, handle_solve_repo_callback,
+    handle_ask_session_callback, handle_ask_text_input, handle_grill_answer, handle_help,
+    handle_jira, handle_jira_callback, handle_jira_input, handle_my_tickets_callback,
+    handle_pending_comment, handle_permissions_add, handle_permissions_back,
+    handle_permissions_done, handle_permissions_revoke, handle_permissions_toggle,
+    handle_permissions_user_input, handle_permissions_user_select, handle_solve_action_callback,
+    handle_solve_branch_name_input, handle_solve_repo_callback,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
 use super::AppState;
@@ -30,10 +31,8 @@ use super::AppState;
 pub enum BotCommand {
     #[command(description = "Show help")]
     Help,
-    #[command(description = "Start bot or view ticket details")]
+    #[command(description = "Ask Claude a question (or view ticket details via deep link)")]
     Start(String),
-    #[command(description = "Ask Claude a question")]
-    Ask(String),
     #[command(description = "Jira — manage tickets, create issues, and more")]
     Jira,
     #[command(description = "Admin panel — permissions, projects, logs, and repos")]
@@ -68,7 +67,7 @@ pub async fn start_polling(
     logger.info(
         "telegram bot starting",
         Some(&serde_json::json!({
-            "jira_projects": config.jira.project_keys,
+            "jira_projects": config.jira.as_ref().map(|j| j.project_keys.as_slice()).unwrap_or_default(),
             "git_projects": config.projects
                 .as_ref()
                 .map(|m| m.keys().cloned().collect::<Vec<_>>())
@@ -226,7 +225,6 @@ async fn dispatch_command(
     let (cmd_name, cmd_args) = match &cmd {
         BotCommand::Help => ("help", String::new()),
         BotCommand::Start(a) => ("start", a.clone()),
-        BotCommand::Ask(a) => ("ask", a.clone()),
         BotCommand::Jira => ("jira", String::new()),
         BotCommand::Admin => ("admin", String::new()),
     };
@@ -253,20 +251,37 @@ async fn dispatch_command(
     match cmd {
         BotCommand::Help => handle_help(bot, msg, state).await,
         BotCommand::Start(args) => {
-            if args.trim().is_empty() {
-                handle_help(bot, msg, state).await
-            } else {
+            let trimmed = args.trim().to_string();
+            // Deep-link ticket lookup: /start PROJ-123 (Jira key pattern)
+            let is_jira_key = trimmed
+                .split_whitespace()
+                .next()
+                .map(|w| {
+                    w.len() <= 20
+                        && w.contains('-')
+                        && w.split('-')
+                            .next()
+                            .map(|p| p.chars().all(|c| c.is_ascii_uppercase()))
+                            .unwrap_or(false)
+                        && w.split('-')
+                            .nth(1)
+                            .map(|n| n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty())
+                            .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if is_jira_key {
                 super::commands::my_tickets::handle_ticket_details(
                     bot,
                     msg.chat.id,
                     state,
                     user_id,
-                    args.trim(),
+                    &trimmed,
                 )
                 .await
+            } else {
+                handle_ask(bot, msg, state, trimmed, user_id).await
             }
         }
-        BotCommand::Ask(args) => handle_ask(bot, msg, state, args, user_id).await,
         BotCommand::Jira => handle_jira(bot, msg, state).await,
         BotCommand::Admin => {
             if !is_admin(user_id, &state) {
@@ -384,6 +399,22 @@ async fn dispatch_callback(
         return Ok(());
     }
 
+    if data.starts_with("solve:action:") {
+        let parts: Vec<&str> = data.splitn(4, ':').collect();
+        if parts.len() == 4 {
+            let action = parts[2].to_string();
+            let issue_key = parts[3].to_string();
+            let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
+                Some(id) => id,
+                None => return Ok(()),
+            };
+            let _ = bot.answer_callback_query(query.id.clone()).await;
+            return handle_solve_action_callback(bot, chat_id, state, user_id, &action, &issue_key)
+                .await;
+        }
+        return Ok(());
+    }
+
     if data.starts_with("ask:") {
         return handle_ask_session_callback(bot, query, state).await;
     }
@@ -493,6 +524,23 @@ async fn dispatch_message(
             "pending_comment"
         } else if s
             .as_deref()
+            .map(|s| {
+                s.pending_solve
+                    .as_ref()
+                    .map(|p| p.awaiting_branch_name)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+        {
+            "pending_solve_branch_name"
+        } else if s
+            .as_deref()
+            .map(|s| s.pending_grill.is_some())
+            .unwrap_or(false)
+        {
+            "pending_grill_answer"
+        } else if s
+            .as_deref()
             .map(|s| s.pending_ask.is_some())
             .unwrap_or(false)
         {
@@ -569,6 +617,33 @@ async fn dispatch_message(
 
     if let Some((issue_key,)) = pending_comment {
         return handle_pending_comment(bot, msg, state, issue_key).await;
+    }
+
+    // Check pending solve branch name confirmation
+    let awaiting_branch_name = state
+        .chat_states
+        .get(&chat_id)
+        .map(|s| {
+            s.pending_solve
+                .as_ref()
+                .map(|p| p.awaiting_branch_name)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if awaiting_branch_name {
+        return handle_solve_branch_name_input(bot, msg, state, user_id).await;
+    }
+
+    // Check active grill session
+    let has_pending_grill = state
+        .chat_states
+        .get(&chat_id)
+        .map(|s| s.pending_grill.is_some())
+        .unwrap_or(false);
+
+    if has_pending_grill {
+        return handle_grill_answer(bot, msg, state, user_id).await;
     }
 
     // Check pending ask

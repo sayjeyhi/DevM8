@@ -40,7 +40,7 @@ pub struct JiraConfig {
     pub project_keys: Vec<String>,
 }
 
-/// Per-user Jira credentials — overrides the global [jira] section for that user.
+/// Per-user Jira credentials.
 /// TOML key: [user_jira.<telegram_user_id>]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserJiraConfig {
@@ -48,7 +48,6 @@ pub struct UserJiraConfig {
     pub email: String,
     pub api_token: String,
     /// Project keys this user can access on their Jira instance.
-    /// Empty means fall back to the global [jira].project_keys list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub project_keys: Vec<String>,
     /// Status names the user wants to see in the "Filter by status" picker.
@@ -141,7 +140,9 @@ fn default_poll_interval_ms() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub telegram: TelegramConfig,
-    pub jira: JiraConfig,
+    /// Global Jira config is optional — users configure their own via /jira.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira: Option<JiraConfig>,
     pub claude: ClaudeConfig,
 
     /// Map from PROJECT_KEY → list of repo paths

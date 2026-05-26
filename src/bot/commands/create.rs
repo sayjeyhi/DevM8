@@ -140,11 +140,16 @@ pub async fn handle_create_confirm(
 
     let thinking = bot.send_message(chat_id, "Creating issue...").await?;
 
-    let issue = match state
-        .jira_for_user(user_id)
-        .create_issue(project_key, title, description)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.edit_message_text(
+            chat_id,
+            thinking.id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let issue = match jira.create_issue(project_key, title, description).await {
         Ok(issue) => issue,
         Err(e) => {
             state.logger.error(

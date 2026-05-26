@@ -434,7 +434,9 @@ pub async fn handle_jira_projects_start(
 
     let thinking = bot.send_message(chat_id, "Loading projects...").await?;
 
-    let client = state.jira_for_user(user_id);
+    let Some(client) = state.jira_for_user(user_id) else {
+        return Ok(());
+    };
     let projects: Vec<(String, String)> = match client.get_projects().await {
         Ok(list) => list.into_iter().map(|p| (p.key, p.name)).collect(),
         Err(e) => {
@@ -650,7 +652,9 @@ pub async fn handle_jira_fav_statuses_start(
 
     let thinking = bot.send_message(chat_id, "Loading statuses...").await?;
 
-    let client = state.jira_for_user(user_id);
+    let Some(client) = state.jira_for_user(user_id) else {
+        return Ok(());
+    };
     let all_statuses: Vec<String> = match client.get_statuses().await {
         Ok(list) => list.into_iter().map(|s| s.name).collect(),
         Err(e) => {

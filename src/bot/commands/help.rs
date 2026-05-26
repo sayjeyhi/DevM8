@@ -26,7 +26,7 @@ pub const HELP_TEXT: &str = "\
   List your last 10 assigned Jira tickets.
 
 <b>AI</b>
-/ask [question]
+/start [question]
   Ask Claude a question about a repository.
 
 <b>Projects</b>

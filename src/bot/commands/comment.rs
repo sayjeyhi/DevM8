@@ -35,7 +35,15 @@ pub async fn handle_comment(
         .logger
         .info("comment: adding comment", Some(&json!({ "key": &key })));
 
-    match state.jira_for_user(user_id).add_comment(&key, &text).await {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    match jira.add_comment(&key, &text).await {
         Ok(()) => {
             state
                 .logger
@@ -79,11 +87,15 @@ pub async fn handle_pending_comment(
         Some(&json!({ "key": &issue_key })),
     );
 
-    match state
-        .jira_for_user(user_id)
-        .add_comment(&issue_key, &text)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            msg.chat.id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    match jira.add_comment(&issue_key, &text).await {
         Ok(()) => {
             state.logger.info(
                 "comment: pending comment added",

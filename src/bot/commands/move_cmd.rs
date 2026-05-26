@@ -36,11 +36,15 @@ pub async fn handle_move(
         Some(&json!({ "key": &key, "target_status": &status })),
     );
 
-    match state
-        .jira_for_user(user_id)
-        .transition_issue(&key, &status)
-        .await
-    {
+    let Some(jira) = state.jira_for_user(user_id) else {
+        bot.send_message(
+            chat_id,
+            "Please set up your Jira account first. Use /jira → My Jira.",
+        )
+        .await?;
+        return Ok(());
+    };
+    match jira.transition_issue(&key, &status).await {
         Ok(()) => {
             state.logger.info(
                 "move: transition complete",

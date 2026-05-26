@@ -30,5 +30,8 @@ pub use permissions::{
     handle_permissions_revoke, handle_permissions_toggle, handle_permissions_user_input,
     handle_permissions_user_select,
 };
-pub use solve::{handle_solve, handle_solve_repo_callback};
+pub use solve::{
+    handle_grill_answer, handle_solve, handle_solve_action_callback,
+    handle_solve_branch_name_input, handle_solve_repo_callback,
+};
 pub use status::handle_status;

@@ -121,31 +121,33 @@ fn validate_config(config: &AppConfig) -> Result<(), AppError> {
         )));
     }
 
-    // Jira
-    if let Some(msg) = validators::validate_jira_base_url(&config.jira.base_url) {
-        return Err(AppError::Friendly(FriendlyError::with_hint(
-            format!("jira.base_url: {msg}"),
-            "The Jira base URL must start with https://",
-        )));
-    }
-    if let Some(msg) = validators::validate_email(&config.jira.email) {
-        return Err(AppError::Friendly(FriendlyError::with_hint(
-            format!("jira.email: {msg}"),
-            "Provide a valid email address.",
-        )));
-    }
-    if let Some(msg) = validators::validate_api_token(&config.jira.api_token) {
-        return Err(AppError::Friendly(FriendlyError::with_hint(
-            format!("jira.api_token: {msg}"),
-            "The API token must not be empty.",
-        )));
-    }
-    for key in &config.jira.project_keys {
-        if let Some(msg) = validators::validate_project_key(key) {
+    // Global Jira (optional)
+    if let Some(jira) = &config.jira {
+        if let Some(msg) = validators::validate_jira_base_url(&jira.base_url) {
             return Err(AppError::Friendly(FriendlyError::with_hint(
-                format!("jira.project_keys: {msg}"),
-                "Project keys must match ^[A-Z][A-Z0-9_]+$",
+                format!("jira.base_url: {msg}"),
+                "The Jira base URL must start with https://",
             )));
+        }
+        if let Some(msg) = validators::validate_email(&jira.email) {
+            return Err(AppError::Friendly(FriendlyError::with_hint(
+                format!("jira.email: {msg}"),
+                "Provide a valid email address.",
+            )));
+        }
+        if let Some(msg) = validators::validate_api_token(&jira.api_token) {
+            return Err(AppError::Friendly(FriendlyError::with_hint(
+                format!("jira.api_token: {msg}"),
+                "The API token must not be empty.",
+            )));
+        }
+        for key in &jira.project_keys {
+            if let Some(msg) = validators::validate_project_key(key) {
+                return Err(AppError::Friendly(FriendlyError::with_hint(
+                    format!("jira.project_keys: {msg}"),
+                    "Project keys must match ^[A-Z][A-Z0-9_]+$",
+                )));
+            }
         }
     }
 

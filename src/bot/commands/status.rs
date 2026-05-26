@@ -39,8 +39,18 @@ pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> R
     };
 
     // Jira / git config
-    let jira_url = escape_html(&state.config.jira.base_url);
-    let jira_projects = escape_html(&state.config.jira.project_keys.join(", "));
+    let jira_url = state
+        .config
+        .jira
+        .as_ref()
+        .map(|j| escape_html(&j.base_url))
+        .unwrap_or_else(|| "per-user only".to_string());
+    let jira_projects = state
+        .config
+        .jira
+        .as_ref()
+        .map(|j| escape_html(&j.project_keys.join(", ")))
+        .unwrap_or_else(|| "-".to_string());
     let mut git_keys: Vec<String> = state.git_map.keys().cloned().collect();
     git_keys.sort();
     let git_projects = if git_keys.is_empty() {

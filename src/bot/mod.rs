@@ -28,8 +28,8 @@ use crate::slack::SlackClient;
 
 #[allow(dead_code)]
 pub struct AppState {
-    /// Global Jira client (fallback when no per-user override exists).
-    pub jira: Arc<JiraClient>,
+    /// Global Jira client (optional fallback when no per-user override exists).
+    pub jira: Option<Arc<JiraClient>>,
 
     /// Per-user Jira clients — keyed by Telegram user_id.
     pub user_jira_clients: DashMap<i64, Arc<JiraClient>>,
@@ -75,12 +75,12 @@ impl AppState {
         }
     }
 
-    /// Returns the per-user Jira client if configured, otherwise the global fallback.
-    pub fn jira_for_user(&self, user_id: i64) -> Arc<JiraClient> {
+    /// Returns the per-user Jira client, or the global fallback if configured.
+    pub fn jira_for_user(&self, user_id: i64) -> Option<Arc<JiraClient>> {
         self.user_jira_clients
             .get(&user_id)
             .map(|c| Arc::clone(&*c))
-            .unwrap_or_else(|| Arc::clone(&self.jira))
+            .or_else(|| self.jira.as_ref().map(Arc::clone))
     }
 
     pub fn has_user_jira(&self, user_id: i64) -> bool {
@@ -98,16 +98,11 @@ impl AppState {
             .trim_start_matches("https://")
             .trim_end_matches('/')
             .to_string();
-        let project_keys = if cfg.project_keys.is_empty() {
-            self.jira.project_keys().to_vec()
-        } else {
-            cfg.project_keys.clone()
-        };
         let client = JiraClient::new(JiraClientConfig {
             host,
             email: cfg.email.clone(),
             api_token: cfg.api_token.clone(),
-            project_keys,
+            project_keys: cfg.project_keys.clone(),
             issue_type: None,
             request_timeout_ms: None,
         })?;
@@ -125,24 +120,26 @@ impl AppState {
         logger: Arc<dyn Logger>,
         bot_username: String,
     ) -> anyhow::Result<Self> {
-        // Extract the host from the base_url (strip "https://" prefix and trailing slash).
-        let host = config
+        let jira: Option<Arc<JiraClient>> = config
             .jira
-            .base_url
-            .trim_start_matches("https://")
-            .trim_end_matches('/')
-            .to_string();
-
-        let jira_cfg = JiraClientConfig {
-            host,
-            email: config.jira.email.clone(),
-            api_token: config.jira.api_token.clone(),
-            project_keys: config.jira.project_keys.clone(),
-            issue_type: None,
-            request_timeout_ms: None,
-        };
-
-        let jira = Arc::new(JiraClient::new(jira_cfg)?);
+            .as_ref()
+            .map(|jira_cfg| {
+                let host = jira_cfg
+                    .base_url
+                    .trim_start_matches("https://")
+                    .trim_end_matches('/')
+                    .to_string();
+                JiraClient::new(JiraClientConfig {
+                    host,
+                    email: jira_cfg.email.clone(),
+                    api_token: jira_cfg.api_token.clone(),
+                    project_keys: jira_cfg.project_keys.clone(),
+                    issue_type: None,
+                    request_timeout_ms: None,
+                })
+                .map(Arc::new)
+            })
+            .transpose()?;
 
         let user_jira_clients: DashMap<i64, Arc<JiraClient>> = DashMap::new();
         for (uid_str, user_cfg) in &config.user_jira {
@@ -152,16 +149,11 @@ impl AppState {
                     .trim_start_matches("https://")
                     .trim_end_matches('/')
                     .to_string();
-                let user_project_keys = if user_cfg.project_keys.is_empty() {
-                    config.jira.project_keys.clone()
-                } else {
-                    user_cfg.project_keys.clone()
-                };
                 if let Ok(client) = JiraClient::new(JiraClientConfig {
                     host: user_host,
                     email: user_cfg.email.clone(),
                     api_token: user_cfg.api_token.clone(),
-                    project_keys: user_project_keys,
+                    project_keys: user_cfg.project_keys.clone(),
                     issue_type: None,
                     request_timeout_ms: None,
                 }) {
