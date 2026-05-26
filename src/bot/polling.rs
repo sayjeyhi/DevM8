@@ -406,7 +406,7 @@ async fn dispatch_callback(
             None => return Ok(()),
         };
         let _ = bot.answer_callback_query(query.id.clone()).await;
-        return handle_post_analysis_implement(bot, chat_id, state, &issue_key).await;
+        return handle_post_analysis_implement(bot, chat_id, state, user_id, &issue_key).await;
     }
 
     if data.starts_with("solve:action:") {

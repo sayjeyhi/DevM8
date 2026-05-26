@@ -551,10 +551,14 @@ pub async fn handle_solve_action_callback(
                 cwd.clone(),
             )
             .await?;
-            let repo_path = git.as_ref().map(|g| g.repo_path.clone());
+            let session = if let Some(mg) = git {
+                state.worktree_session(user_id, mg).await
+            } else {
+                AskSession::new(user_id, None, None)
+            };
             {
                 let mut entry = state.chat_states.entry(chat_id.0).or_default();
-                entry.ask_session = Some(AskSession::new(repo_path, git));
+                entry.ask_session = Some(session);
             }
             bot.send_message(
                 chat_id,
@@ -960,6 +964,7 @@ pub async fn handle_post_analysis_implement(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let pending = state
@@ -983,8 +988,11 @@ pub async fn handle_post_analysis_implement(
         cs.pending_post_analysis = None;
     }
 
-    let repo_path = p.git.as_ref().map(|g| g.repo_path.clone());
-    let session = AskSession::new(repo_path, p.git);
+    let session = if let Some(mg) = p.git {
+        state.worktree_session(user_id, mg).await
+    } else {
+        AskSession::new(user_id, None, None)
+    };
     let session = match p.qa_context {
         Some(ctx) => session.with_context(ctx),
         None => session,

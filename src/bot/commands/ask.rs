@@ -253,7 +253,7 @@ pub async fn ask_with_session(
     let pushed = {
         let mut entry = state.chat_states.entry(chat_id.0).or_default();
         let session = entry.ask_session.get_or_insert_with(|| {
-            let mut s = AskSession::new(repo_path_opt.clone(), git_opt.clone());
+            let mut s = AskSession::new(0, repo_path_opt.clone(), git_opt.clone());
             s.context = context.clone();
             s
         });
@@ -362,7 +362,7 @@ pub async fn handle_ask(
             // Initialize session without repo context
             {
                 let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
-                entry.ask_session = Some(AskSession::new(None, None));
+                entry.ask_session = Some(AskSession::new(user_id, None, None));
             }
             return ask_with_session(bot, msg.chat.id, state, question).await;
         }
@@ -370,16 +370,23 @@ pub async fn handle_ask(
 
     if all_repos.len() == 1 {
         let (project_key, repo_path) = &all_repos[0];
-        let git = state
+        let main_git = state
             .git_map
             .values()
             .flat_map(|v| v.iter())
             .find(|g| g.repo_path == *repo_path)
             .cloned();
 
+        let session = if let Some(mg) = main_git {
+            state.worktree_session(user_id, mg).await
+        } else {
+            AskSession::new(user_id, Some(repo_path.clone()), None)
+        };
+        let session_git = session.git.clone();
+
         {
             let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
-            entry.ask_session = Some(AskSession::new(Some(repo_path.clone()), git.clone()));
+            entry.ask_session = Some(session);
         }
 
         if question.is_empty() {
@@ -387,7 +394,7 @@ pub async fn handle_ask(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("repo");
-            if let Some(ref g) = git {
+            if let Some(ref g) = session_git {
                 send_repo_ready_message(&bot, msg.chat.id, project_key, repo_name, g).await?;
             } else {
                 bot.send_message(
@@ -659,12 +666,14 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
         Some(AskMode::Followup) | None => {
             // Treat as a follow-up ask
             {
+                let uid = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
                 let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
                 entry.pending_ask = None;
 
                 // Ensure session exists with repo context
                 if entry.ask_session.is_none() {
                     entry.ask_session = Some(AskSession::new(
+                        uid,
                         pending.repo_path.clone(),
                         pending.git.clone(),
                     ));
@@ -702,8 +711,8 @@ pub async fn handle_ask_session_callback(
         let user_id = q.from.id.0 as i64;
         let all_repos = accessible_repos(&state, user_id);
 
-        let (project_key, repo_path, git) = match all_repos.into_iter().nth(idx) {
-            Some(item) => (item.0, item.1, Some(item.2)),
+        let (project_key, repo_path, main_git) = match all_repos.into_iter().nth(idx) {
+            Some(item) => (item.0, item.1, item.2),
             None => {
                 bot.send_message(chat_id, "Invalid selection.").await?;
                 return Ok(());
@@ -718,10 +727,13 @@ pub async fn handle_ask_session_callback(
             })
         };
 
+        let session = state.worktree_session(user_id, main_git).await;
+        let session_git = session.git.clone();
+
         {
             let mut entry = state.chat_states.entry(chat_id.0).or_default();
             entry.pending_ask = None;
-            entry.ask_session = Some(AskSession::new(Some(repo_path.clone()), git.clone()));
+            entry.ask_session = Some(session);
         }
 
         if let Some(q_text) = question {
@@ -731,7 +743,7 @@ pub async fn handle_ask_session_callback(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("repo");
-            if let Some(ref g) = git {
+            if let Some(ref g) = session_git {
                 send_repo_ready_message(&bot, chat_id, &project_key, repo_name, g).await?;
             } else {
                 bot.send_message(chat_id, "What would you like to ask?")
@@ -1117,6 +1129,14 @@ pub async fn handle_ask_session_callback(
         }
 
         "end" => {
+            let cleanup = state.chat_states.get(&chat_id.0).and_then(|cs| {
+                cs.ask_session
+                    .as_ref()
+                    .and_then(|s| s.main_git.as_ref().map(|mg| (Arc::clone(mg), s.user_id)))
+            });
+            if let Some((main_git, uid)) = cleanup {
+                let _ = main_git.remove_worktree(uid).await;
+            }
             state.logger.info("ask: session ended", None);
             {
                 let mut entry = state.chat_states.entry(chat_id.0).or_default();

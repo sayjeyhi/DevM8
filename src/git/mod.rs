@@ -172,6 +172,73 @@ impl GitClient {
         Ok(())
     }
 
+    /// Returns the path for a user-scoped worktree: `<repo>/.worktrees/<user_id>`.
+    pub fn worktree_path(&self, user_id: i64) -> PathBuf {
+        self.repo_path.join(".worktrees").join(user_id.to_string())
+    }
+
+    /// Ensure `.worktrees/` is present in the repo's `.gitignore`.
+    /// Appends the entry if missing; creates the file if absent.
+    async fn ensure_gitignore_worktrees(&self) {
+        use tokio::fs;
+        use tokio::io::AsyncWriteExt;
+
+        let gitignore = self.repo_path.join(".gitignore");
+        let entry = ".worktrees/";
+
+        let existing = fs::read_to_string(&gitignore).await.unwrap_or_default();
+        if existing.lines().any(|l| l.trim() == entry) {
+            return;
+        }
+
+        let append = if existing.is_empty() || existing.ends_with('\n') {
+            format!("{}\n", entry)
+        } else {
+            format!("\n{}\n", entry)
+        };
+
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&gitignore)
+            .await
+        {
+            let _ = file.write_all(append.as_bytes()).await;
+        }
+    }
+
+    /// Create an isolated worktree for `user_id` at `origin/main`.
+    /// Any previous worktree for the same user is removed first.
+    /// The worktree is placed at `<repo>/.worktrees/<user_id>/`.
+    /// `.worktrees/` is automatically added to the repo's `.gitignore`.
+    pub async fn create_worktree(&self, user_id: i64) -> Result<PathBuf> {
+        self.ensure_gitignore_worktrees().await;
+        let path = self.worktree_path(user_id);
+        if path.exists() {
+            let _ = self.remove_worktree(user_id).await;
+        }
+        let _ = self.exec(&["fetch", "origin", "main"]).await;
+        let branch = format!("session/{}", user_id);
+        let _ = self.exec(&["branch", "-D", &branch]).await;
+        let path_str = path.to_string_lossy().into_owned();
+        self.run(&["worktree", "add", &path_str, "-b", &branch, "origin/main"])
+            .await?;
+        Ok(path)
+    }
+
+    /// Remove the worktree for `user_id` and prune stale worktree metadata.
+    pub async fn remove_worktree(&self, user_id: i64) -> Result<()> {
+        let path = self.worktree_path(user_id);
+        if path.exists() {
+            let path_str = path.to_string_lossy().into_owned();
+            let _ = self
+                .run(&["worktree", "remove", "--force", &path_str])
+                .await;
+        }
+        let _ = self.exec(&["worktree", "prune"]).await;
+        Ok(())
+    }
+
     /// Create a PR using the `gh` CLI and return its URL.
     /// Falls back to `gh pr view` if the PR already exists.
     pub async fn create_pr(&self) -> Result<String> {

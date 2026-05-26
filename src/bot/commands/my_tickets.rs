@@ -653,7 +653,7 @@ pub async fn handle_ticket_ask(
         // No git context — start session directly
         {
             let mut entry = state.chat_states.entry(chat_id.0).or_default();
-            entry.ask_session = Some(AskSession::new(None, None).with_context(context));
+            entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
         }
         bot.send_message(
             chat_id,
@@ -681,7 +681,7 @@ pub async fn handle_ticket_ask(
         {
             let mut entry = state.chat_states.entry(chat_id.0).or_default();
             entry.ask_session = Some(
-                AskSession::new(Some(git.repo_path.clone()), Some(git.clone()))
+                AskSession::new(user_id, Some(git.repo_path.clone()), Some(git.clone()))
                     .with_context(context),
             );
         }
@@ -715,7 +715,7 @@ pub async fn handle_ticket_ask(
     {
         let mut entry = state.chat_states.entry(chat_id.0).or_default();
         // Store context temporarily; session will be created after repo selection
-        entry.ask_session = Some(AskSession::new(None, None).with_context(context));
+        entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
         entry.pending_ask = Some(PendingAsk {
             repo_path: None,
             git: None,
