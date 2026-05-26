@@ -144,7 +144,6 @@ pub struct PendingGrill {
 #[derive(Debug, Clone)]
 pub struct PendingPostAnalysis {
     pub issue_key: String,
-    pub cwd: Option<String>,
     pub git: Option<Arc<GitClient>>,
     /// Q&A context from grill flow, if any.
     pub qa_context: Option<String>,

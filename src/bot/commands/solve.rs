@@ -472,7 +472,6 @@ async fn complete_grill(
         let mut entry = state.chat_states.entry(chat_id.0).or_default();
         entry.pending_post_analysis = Some(PendingPostAnalysis {
             issue_key: grill.issue_key.clone(),
-            cwd: grill.cwd.clone(),
             git: grill.git.clone(),
             qa_context: Some(qa_context),
         });
@@ -526,7 +525,6 @@ pub async fn handle_solve_action_callback(
                 let mut entry = state.chat_states.entry(chat_id.0).or_default();
                 entry.pending_post_analysis = Some(PendingPostAnalysis {
                     issue_key: issue_key.to_string(),
-                    cwd,
                     git,
                     qa_context: None,
                 });
