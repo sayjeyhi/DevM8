@@ -7,19 +7,31 @@ use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 use crate::bot::state::AdminPendingAction;
 use crate::bot::AppState;
 
-use super::{handle_add_project, handle_clone, handle_logs, handle_permissions, handle_status};
+use super::{
+    handle_add_project, handle_audit_logs, handle_clone, handle_logs, handle_permissions,
+    handle_status,
+};
 
 pub async fn handle_admin(bot: Bot, msg: Message, _state: Arc<AppState>) -> Result<()> {
     let keyboard = InlineKeyboardMarkup::new(vec![
-        vec![
-            InlineKeyboardButton::callback("Permissions", "admin:permissions"),
-            InlineKeyboardButton::callback("Logs", "admin:logs"),
-        ],
-        vec![
-            InlineKeyboardButton::callback("Add Project", "admin:add_project"),
-            InlineKeyboardButton::callback("Clone Repo", "admin:clone"),
-        ],
-        vec![InlineKeyboardButton::callback("Status", "admin:status")],
+        vec![InlineKeyboardButton::callback(
+            "🔐 Permissions",
+            "admin:permissions",
+        )],
+        vec![InlineKeyboardButton::callback("📋 Logs", "admin:logs")],
+        vec![InlineKeyboardButton::callback(
+            "🔍 Audit Logs",
+            "admin:audit_logs",
+        )],
+        vec![InlineKeyboardButton::callback(
+            "➕ Add Project",
+            "admin:add_project",
+        )],
+        vec![InlineKeyboardButton::callback(
+            "📥 Clone Repo",
+            "admin:clone",
+        )],
+        vec![InlineKeyboardButton::callback("📊 Status", "admin:status")],
     ]);
 
     bot.send_message(msg.chat.id, "Admin Panel — choose an action:")
@@ -48,6 +60,7 @@ pub async fn handle_admin_callback(
     match data {
         "admin:permissions" => handle_permissions(bot, chat_id, state).await,
         "admin:logs" => handle_logs(bot, chat_id, state, String::new()).await,
+        "admin:audit_logs" => handle_audit_logs(bot, chat_id, state, String::new()).await,
         "admin:status" => handle_status(bot, chat_id, state).await,
         "admin:clone" => {
             state

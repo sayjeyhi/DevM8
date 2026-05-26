@@ -75,13 +75,24 @@ async fn send_repo_ready_message(
     );
 
     let pull_label = format!("⬇️ Pull latest ({} behind)", behind);
-    let keyboard = InlineKeyboardMarkup::new(vec![
+    let mut rows = vec![
         vec![InlineKeyboardButton::callback(
             pull_label,
             "ask:pull_latest",
         )],
-        vec![InlineKeyboardButton::callback("💻 CLI", "ask:cli")],
-    ]);
+        vec![InlineKeyboardButton::callback(
+            "🌿 New branch",
+            "ask:branch",
+        )],
+    ];
+    if !clean {
+        rows.push(vec![InlineKeyboardButton::callback(
+            "📦 Stash changes",
+            "ask:stash_only",
+        )]);
+    }
+    rows.push(vec![InlineKeyboardButton::callback("💻 CLI", "ask:cli")]);
+    let keyboard = InlineKeyboardMarkup::new(rows);
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
@@ -487,7 +498,7 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
                     }
                 }
             } else {
-                bot.send_message(msg.chat.id, "No git context available.")
+                bot.send_message(msg.chat.id, "⚠️ Cannot create branch — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
 
@@ -537,7 +548,7 @@ pub async fn handle_ask_text_input(bot: Bot, msg: Message, state: Arc<AppState>)
                     }
                 }
             } else {
-                bot.send_message(msg.chat.id, "No git context available.")
+                bot.send_message(msg.chat.id, "⚠️ Cannot commit — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
 
@@ -751,7 +762,7 @@ pub async fn handle_ask_session_callback(
                     }
                 }
             } else {
-                bot.send_message(chat_id, "No git context. Type your question:")
+                bot.send_message(chat_id, "⚠️ No git repository linked to this session — pull is unavailable. Type your question:")
                     .await?;
             }
         }
@@ -778,6 +789,29 @@ pub async fn handle_ask_session_callback(
             }
             bot.send_message(chat_id, "Type your follow-up question:")
                 .await?;
+        }
+
+        "stash_only" => {
+            let git = state
+                .chat_states
+                .get(&chat_id.0)
+                .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
+
+            if let Some(ref g) = git {
+                match g.stash(Some("devm8: ask session stash")).await {
+                    Ok(()) => {
+                        bot.send_message(chat_id, "Changes stashed. Type your question:")
+                            .await?;
+                    }
+                    Err(e) => {
+                        bot.send_message(chat_id, format!("Stash failed: {e}"))
+                            .await?;
+                    }
+                }
+            } else {
+                bot.send_message(chat_id, "⚠️ Cannot stash — this session has no linked git repository. Start a new /ask session and select a configured project.")
+                    .await?;
+            }
         }
 
         "branch" => {
@@ -940,7 +974,7 @@ pub async fn handle_ask_session_callback(
                     .parse_mode(ParseMode::Html)
                     .await?;
             } else {
-                bot.send_message(chat_id, "No git context available.")
+                bot.send_message(chat_id, "⚠️ Cannot commit — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
         }
@@ -990,7 +1024,7 @@ pub async fn handle_ask_session_callback(
                     }
                 }
             } else {
-                bot.send_message(chat_id, "No git context available.")
+                bot.send_message(chat_id, "⚠️ Cannot push — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
         }
@@ -1020,7 +1054,7 @@ pub async fn handle_ask_session_callback(
                     }
                 }
             } else {
-                bot.send_message(chat_id, "No git context available.")
+                bot.send_message(chat_id, "⚠️ Cannot pull — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
         }
@@ -1089,7 +1123,7 @@ pub async fn handle_ask_session_callback(
                     }
                 }
             } else {
-                bot.send_message(chat_id, "No git context available.")
+                bot.send_message(chat_id, "⚠️ Cannot open PR — this session has no linked git repository. Start a new /ask session and select a configured project.")
                     .await?;
             }
         }

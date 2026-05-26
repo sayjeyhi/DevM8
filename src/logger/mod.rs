@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod rotate;
 
 use chrono::Local;

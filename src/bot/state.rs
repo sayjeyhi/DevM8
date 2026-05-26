@@ -134,6 +134,21 @@ pub enum JiraPendingAction {
     Move,
     Comment,
     Solve,
+    /// Jira account setup — step 1: waiting for base URL
+    JiraSetupUrl,
+    /// Jira account setup — step 2: base URL received, waiting for email
+    JiraSetupEmail(String),
+    /// Jira account setup — step 3: base URL + email received, waiting for API token
+    JiraSetupToken(String, String),
+    /// Jira account setup — step 4: credentials verified, user is selecting project keys.
+    /// Fields: (base_url, email, api_token, all_projects as (key, name), selected_keys)
+    JiraSetupProjects(String, String, String, Vec<(String, String)>, Vec<String>),
+    /// Post-setup project management: user is toggling project keys.
+    /// Fields: (all_projects as (key, name), selected_keys)
+    JiraManageProjects(Vec<(String, String)>, Vec<String>),
+    /// Favorite statuses picker: user is selecting preferred statuses.
+    /// Fields: (all_status_names, selected_status_names)
+    JiraFavoriteStatuses(Vec<String>, Vec<String>),
 }
 
 // ---------------------------------------------------------------------------

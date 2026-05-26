@@ -12,6 +12,7 @@ pub async fn handle_move(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     args: String,
 ) -> Result<()> {
     let args = args.trim().to_string();
@@ -35,7 +36,11 @@ pub async fn handle_move(
         Some(&json!({ "key": &key, "target_status": &status })),
     );
 
-    match state.jira.transition_issue(&key, &status).await {
+    match state
+        .jira_for_user(user_id)
+        .transition_issue(&key, &status)
+        .await
+    {
         Ok(()) => {
             state.logger.info(
                 "move: transition complete",

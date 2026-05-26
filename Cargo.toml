@@ -29,6 +29,7 @@ url = "2"
 inquire = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+sysinfo = "0.32"
 dashmap = "6"
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 futures-util = "0.3"

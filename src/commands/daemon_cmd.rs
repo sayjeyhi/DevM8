@@ -60,7 +60,14 @@ pub async fn daemon_command() -> Result<(), AppError> {
         logger.warn(&format!("Log rotation failed: {e}"), None);
     }
 
+    // Rotate audit log on startup (20 MiB threshold — double the regular log).
+    {
+        use crate::logger::audit::AuditLogger;
+        AuditLogger::new(&paths.audit_log_file).rotate_if_needed();
+    }
+
     let log_file_clone = paths.log_file.clone();
+    let audit_log_file_clone = paths.audit_log_file.clone();
     let logger_clone = Arc::clone(&logger);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -70,6 +77,8 @@ pub async fn daemon_command() -> Result<(), AppError> {
             if let Err(e) = rotate_if_needed(&log_file_clone, None, None) {
                 logger_clone.warn(&format!("Scheduled log rotation failed: {e}"), None);
             }
+            use crate::logger::audit::AuditLogger;
+            AuditLogger::new(&audit_log_file_clone).rotate_if_needed();
         }
     });
 

@@ -8,6 +8,7 @@ use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseM
 use crate::bot::state::{AskSession, PageCache};
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::config::loader::load_config;
 use crate::jira::types::JiraIssue;
 
 const PAGE_SIZE: u32 = 8;
@@ -111,9 +112,8 @@ pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
     let access = state.project_access.read().unwrap();
     let is_restricted = !is_admin && access.values().any(|ids| ids.contains(&user_id));
 
-    state
-        .jira
-        .project_keys()
+    let jira = state.jira_for_user(user_id);
+    jira.project_keys()
         .iter()
         .filter(|key| {
             if is_admin || access.is_empty() {
@@ -148,7 +148,7 @@ pub async fn handle_my_tickets(
 
     if project_keys.len() == 1 {
         let key = project_keys[0].clone();
-        return handle_my_tickets_project(bot, chat_id, state, &key).await;
+        return handle_my_tickets_project(bot, chat_id, state, user_id, &key).await;
     }
 
     // Multiple project keys — show picker
@@ -178,22 +178,33 @@ pub async fn handle_my_tickets_project(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     project_key: &str,
 ) -> Result<()> {
     state.logger.info(
         "tickets: fetching statuses",
         Some(&json!({ "project": project_key })),
     );
-    let statuses = match state.jira.get_statuses().await {
-        Ok(s) => s,
-        Err(e) => {
-            state.logger.error(
-                &format!("tickets: failed to fetch statuses: {e}"),
-                Some(&json!({ "project": project_key })),
-            );
-            bot.send_message(chat_id, format!("Error fetching statuses: {e}"))
-                .await?;
-            return Ok(());
+    let favorite_statuses: Vec<String> = load_config(None)
+        .ok()
+        .and_then(|c| c.user_jira.get(&user_id.to_string()).cloned())
+        .map(|c| c.favorite_statuses)
+        .unwrap_or_default();
+
+    let status_names: Vec<String> = if !favorite_statuses.is_empty() {
+        favorite_statuses
+    } else {
+        match state.jira_for_user(user_id).get_statuses().await {
+            Ok(s) => s.into_iter().map(|s| s.name).collect(),
+            Err(e) => {
+                state.logger.error(
+                    &format!("tickets: failed to fetch statuses: {e}"),
+                    Some(&json!({ "project": project_key })),
+                );
+                bot.send_message(chat_id, format!("Error fetching statuses: {e}"))
+                    .await?;
+                return Ok(());
+            }
         }
     };
 
@@ -201,10 +212,10 @@ pub async fn handle_my_tickets_project(
         "📋 All statuses",
         format!("tickets:status:{}:ALL", project_key),
     )]];
-    for status in &statuses {
+    for name in &status_names {
         buttons.push(vec![InlineKeyboardButton::callback(
-            format!("{} {}", status_emoji(&status.name), &status.name),
-            format!("tickets:status:{}:{}", project_key, status.name),
+            format!("{} {}", status_emoji(name), name),
+            format!("tickets:status:{}:{}", project_key, name),
         )]);
     }
 
@@ -224,6 +235,7 @@ pub async fn handle_my_tickets_status(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     project_key: &str,
     status_filter: &str,
 ) -> Result<()> {
@@ -239,7 +251,7 @@ pub async fn handle_my_tickets_status(
         Some(&json!({ "project": project_key, "status": status_filter })),
     );
     let result = match state
-        .jira
+        .jira_for_user(user_id)
         .get_my_issues(PAGE_SIZE, None, filter, Some(project_key))
         .await
     {
@@ -290,6 +302,7 @@ pub async fn handle_my_tickets_page(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     target_page: usize,
 ) -> Result<()> {
     let (project_key, status_filter, tokens, current_page) = {
@@ -317,7 +330,7 @@ pub async fn handle_my_tickets_page(
     let page_token = tokens.get(target_page).and_then(|t| t.as_deref());
 
     let result = match state
-        .jira
+        .jira_for_user(user_id)
         .get_my_issues(
             PAGE_SIZE,
             page_token,
@@ -367,6 +380,7 @@ pub async fn handle_ticket_details(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let back_page = state
@@ -379,7 +393,11 @@ pub async fn handle_ticket_details(
         "tickets: fetching issue details",
         Some(&json!({ "key": issue_key })),
     );
-    let issue = match state.jira.get_issue_by_key(issue_key).await {
+    let issue = match state
+        .jira_for_user(user_id)
+        .get_issue_by_key(issue_key)
+        .await
+    {
         Ok(i) => i,
         Err(e) => {
             state.logger.error(
@@ -425,9 +443,14 @@ pub async fn handle_move_start(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
-    let transitions = match state.jira.get_transitions(issue_key).await {
+    let transitions = match state
+        .jira_for_user(user_id)
+        .get_transitions(issue_key)
+        .await
+    {
         Ok(t) => t,
         Err(e) => {
             bot.send_message(chat_id, format!("Error fetching transitions: {e}"))
@@ -472,6 +495,7 @@ pub async fn handle_move_execute(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
     status: &str,
 ) -> Result<()> {
@@ -479,7 +503,11 @@ pub async fn handle_move_execute(
         "tickets: transitioning issue",
         Some(&json!({ "key": issue_key, "target_status": status })),
     );
-    match state.jira.transition_issue(issue_key, status).await {
+    match state
+        .jira_for_user(user_id)
+        .transition_issue(issue_key, status)
+        .await
+    {
         Ok(()) => {
             state.logger.info(
                 "tickets: transition complete",
@@ -541,6 +569,7 @@ pub async fn handle_ticket_ask(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     state.logger.info(
@@ -548,7 +577,11 @@ pub async fn handle_ticket_ask(
         Some(&json!({ "key": issue_key })),
     );
 
-    let issue = match state.jira.get_issue_by_key(issue_key).await {
+    let issue = match state
+        .jira_for_user(user_id)
+        .get_issue_by_key(issue_key)
+        .await
+    {
         Ok(i) => i,
         Err(e) => {
             state.logger.error(
@@ -695,6 +728,7 @@ pub async fn handle_my_tickets_callback(
     state: Arc<AppState>,
 ) -> Result<()> {
     let _ = bot.answer_callback_query(q.id.clone()).await;
+    let user_id = q.from.id.0 as i64;
 
     let data = q.data.as_deref().unwrap_or("");
     let chat_id = match q.message.as_ref().map(|m| m.chat().id) {
@@ -704,14 +738,15 @@ pub async fn handle_my_tickets_callback(
 
     // tickets:project:<key>
     if let Some(key) = data.strip_prefix("tickets:project:") {
-        return handle_my_tickets_project(bot, chat_id, state, key).await;
+        return handle_my_tickets_project(bot, chat_id, state, user_id, key).await;
     }
 
     // tickets:status:<project_key>:<status>
     if let Some(rest) = data.strip_prefix("tickets:status:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
         if parts.len() == 2 {
-            return handle_my_tickets_status(bot, chat_id, state, parts[0], parts[1]).await;
+            return handle_my_tickets_status(bot, chat_id, state, user_id, parts[0], parts[1])
+                .await;
         }
         return Ok(());
     }
@@ -719,7 +754,7 @@ pub async fn handle_my_tickets_callback(
     // tickets:page:<page_index>
     if let Some(page_str) = data.strip_prefix("tickets:page:") {
         let page: usize = page_str.parse().unwrap_or(0);
-        return handle_my_tickets_page(bot, chat_id, state, page).await;
+        return handle_my_tickets_page(bot, chat_id, state, user_id, page).await;
     }
 
     // tickets:refresh:<page_index> — re-fetch from Jira (clears token cache, goes to page 0)
@@ -736,34 +771,35 @@ pub async fn handle_my_tickets_callback(
             }
         };
         let filter = status_filter.as_deref().unwrap_or("ALL");
-        return handle_my_tickets_status(bot, chat_id, state, &project_key, filter).await;
+        return handle_my_tickets_status(bot, chat_id, state, user_id, &project_key, filter).await;
     }
 
     // tickets:details:<issue_key>
     if let Some(key) = data.strip_prefix("tickets:details:") {
-        return handle_ticket_details(bot, chat_id, state, key).await;
+        return handle_ticket_details(bot, chat_id, state, user_id, key).await;
     }
 
     // tickets:ask:<issue_key>
     if let Some(key) = data.strip_prefix("tickets:ask:") {
-        return handle_ticket_ask(bot, chat_id, state, key).await;
+        return handle_ticket_ask(bot, chat_id, state, user_id, key).await;
     }
 
     // tickets:solve:<issue_key>
     if let Some(key) = data.strip_prefix("tickets:solve:") {
-        return crate::bot::commands::solve::handle_repo_picker(bot, chat_id, state, key).await;
+        return crate::bot::commands::solve::handle_repo_picker(bot, chat_id, state, user_id, key)
+            .await;
     }
 
     // tickets:move_start:<issue_key>
     if let Some(key) = data.strip_prefix("tickets:move_start:") {
-        return handle_move_start(bot, chat_id, state, key).await;
+        return handle_move_start(bot, chat_id, state, user_id, key).await;
     }
 
     // tickets:move_exec:<issue_key>:<status>
     if let Some(rest) = data.strip_prefix("tickets:move_exec:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
         if parts.len() == 2 {
-            return handle_move_execute(bot, chat_id, state, parts[0], parts[1]).await;
+            return handle_move_execute(bot, chat_id, state, user_id, parts[0], parts[1]).await;
         }
         return Ok(());
     }

@@ -1,10 +1,9 @@
-use std::time::{Duration, SystemTime};
-
 use crate::config::loader::load_config;
 use crate::daemon::agent_status;
 use crate::daemon::pid::{is_process_running, read_pid};
 use crate::shared::errors::AppError;
 use crate::shared::paths::PATHS;
+use crate::shared::utils::compute_uptime_from_pid_file;
 
 pub async fn status_command() -> Result<(), AppError> {
     let paths = &*PATHS;
@@ -71,30 +70,4 @@ pub async fn status_command() -> Result<(), AppError> {
     println!("  Log:      {}", log_path);
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn compute_uptime_from_pid_file(paths: &crate::shared::paths::Paths) -> Option<String> {
-    let meta = std::fs::metadata(&paths.pid_file).ok()?;
-    let modified = meta.modified().ok()?;
-    let elapsed = SystemTime::now().duration_since(modified).ok()?;
-    Some(format_duration(elapsed))
-}
-
-fn format_duration(d: Duration) -> String {
-    let total_secs = d.as_secs();
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let secs = total_secs % 60;
-
-    if hours > 0 {
-        format!("{}h {}m {}s", hours, minutes, secs)
-    } else if minutes > 0 {
-        format!("{}m {}s", minutes, secs)
-    } else {
-        format!("{}s", secs)
-    }
 }

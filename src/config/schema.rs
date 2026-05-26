@@ -40,6 +40,23 @@ pub struct JiraConfig {
     pub project_keys: Vec<String>,
 }
 
+/// Per-user Jira credentials — overrides the global [jira] section for that user.
+/// TOML key: [user_jira.<telegram_user_id>]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserJiraConfig {
+    pub base_url: String,
+    pub email: String,
+    pub api_token: String,
+    /// Project keys this user can access on their Jira instance.
+    /// Empty means fall back to the global [jira].project_keys list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub project_keys: Vec<String>,
+    /// Status names the user wants to see in the "Filter by status" picker.
+    /// Empty means show all statuses from the Jira instance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorite_statuses: Vec<String>,
+}
+
 fn default_sandbox() -> bool {
     cfg!(target_os = "linux")
 }
@@ -136,4 +153,8 @@ pub struct AppConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<SlackConfig>,
+
+    /// Per-user Jira credential overrides. Key is Telegram user_id as a string.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub user_jira: HashMap<String, UserJiraConfig>,
 }

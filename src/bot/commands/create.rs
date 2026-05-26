@@ -48,6 +48,7 @@ pub async fn handle_create_suggest(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    _user_id: i64,
     project_key: String,
     title: String,
 ) -> Result<()> {
@@ -101,7 +102,7 @@ pub async fn handle_create_suggest(
     ));
 
     let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "Use this description",
+        "✅ Use this description",
         "jira:create_confirm",
     )]]);
 
@@ -127,6 +128,7 @@ pub async fn handle_create_confirm(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     project_key: &str,
     title: &str,
     description: &str,
@@ -139,7 +141,7 @@ pub async fn handle_create_confirm(
     let thinking = bot.send_message(chat_id, "Creating issue...").await?;
 
     let issue = match state
-        .jira
+        .jira_for_user(user_id)
         .create_issue(project_key, title, description)
         .await
     {

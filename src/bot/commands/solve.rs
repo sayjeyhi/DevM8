@@ -30,6 +30,7 @@ pub async fn solve_by_key(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
     cwd: Option<String>,
 ) -> Result<()> {
@@ -49,7 +50,11 @@ pub async fn solve_by_key(
     let status_msg_id = status_msg.id;
     let _typing = keep_typing(bot.clone(), chat_id);
 
-    let issue = match state.jira.get_issue_by_key(issue_key).await {
+    let issue = match state
+        .jira_for_user(user_id)
+        .get_issue_by_key(issue_key)
+        .await
+    {
         Ok(i) => i,
         Err(e) => {
             state.logger.error(
@@ -143,7 +148,11 @@ pub async fn solve_by_key(
         "solve: posting analysis as Jira comment",
         Some(&json!({ "key": issue_key })),
     );
-    match state.jira.add_comment(issue_key, &analysis).await {
+    match state
+        .jira_for_user(user_id)
+        .add_comment(issue_key, &analysis)
+        .await
+    {
         Ok(()) => {
             state
                 .logger
@@ -164,6 +173,7 @@ pub async fn handle_repo_picker(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
@@ -175,7 +185,7 @@ pub async fn handle_repo_picker(
             "solve: no repos configured, solving without git context",
             Some(&json!({ "key": issue_key })),
         );
-        return solve_by_key(bot, chat_id, state, issue_key, None).await;
+        return solve_by_key(bot, chat_id, state, user_id, issue_key, None).await;
     }
 
     if repos.len() == 1 {
@@ -200,7 +210,7 @@ pub async fn handle_repo_picker(
                 },
             );
         }
-        return handle_branch_picker(bot, chat_id, state).await;
+        return handle_branch_picker(bot, chat_id, state, user_id).await;
     }
 
     state.logger.info(
@@ -240,7 +250,12 @@ pub async fn handle_repo_picker(
     Ok(())
 }
 
-pub async fn handle_branch_picker(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> Result<()> {
+pub async fn handle_branch_picker(
+    bot: Bot,
+    chat_id: ChatId,
+    state: Arc<AppState>,
+    _user_id: i64,
+) -> Result<()> {
     let pending = {
         state
             .chat_states
@@ -318,6 +333,7 @@ pub async fn handle_branch_choice(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     choice: &str,
     issue_key: &str,
 ) -> Result<()> {
@@ -434,13 +450,14 @@ pub async fn handle_branch_choice(
         cs.pending_solve = None;
     }
 
-    solve_by_key(bot, chat_id, state, issue_key, cwd).await
+    solve_by_key(bot, chat_id, state, user_id, issue_key, cwd).await
 }
 
 pub async fn handle_solve(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     args: String,
 ) -> Result<()> {
     let issue_key = args.trim().to_string();
@@ -461,9 +478,9 @@ pub async fn handle_solve(
     );
 
     if has_repos {
-        handle_repo_picker(bot, chat_id, state, &issue_key).await
+        handle_repo_picker(bot, chat_id, state, user_id, &issue_key).await
     } else {
-        solve_by_key(bot, chat_id, state, &issue_key, None).await
+        solve_by_key(bot, chat_id, state, user_id, &issue_key, None).await
     }
 }
 
@@ -473,6 +490,7 @@ pub async fn handle_solve_repo_callback(
     state: Arc<AppState>,
 ) -> Result<()> {
     let _ = bot.answer_callback_query(q.id.clone()).await;
+    let user_id = q.from.id.0 as i64;
 
     let data = q.data.as_deref().unwrap_or("");
     let parts: Vec<&str> = data.splitn(4, ':').collect();
@@ -505,5 +523,5 @@ pub async fn handle_solve_repo_callback(
         });
     }
 
-    handle_branch_picker(bot, chat_id, state).await
+    handle_branch_picker(bot, chat_id, state, user_id).await
 }

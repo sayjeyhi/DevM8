@@ -208,20 +208,47 @@ async fn dispatch_command(
             "unauthorized command attempt",
             Some(&serde_json::json!({ "user_id": user_id, "chat_id": msg.chat.id.0 })),
         );
+        let uname = msg.from.as_ref().map(format_user_name).unwrap_or_default();
+        let raw_text = msg.text().unwrap_or("").to_string();
+        state.audit_logger.log_action(
+            user_id,
+            &uname,
+            "unauthorized_command",
+            "",
+            Some(serde_json::json!({ "text": raw_text })),
+        );
+        if let Some(u) = &msg.from {
+            notify_admin_unauthorized(&bot, &state, u, "command").await;
+        }
         return Ok(());
     }
 
-    let cmd_name = match &cmd {
-        BotCommand::Help => "help",
-        BotCommand::Start(_) => "start",
-        BotCommand::Ask(_) => "ask",
-        BotCommand::Jira => "jira",
-        BotCommand::Admin => "admin",
+    let (cmd_name, cmd_args) = match &cmd {
+        BotCommand::Help => ("help", String::new()),
+        BotCommand::Start(a) => ("start", a.clone()),
+        BotCommand::Ask(a) => ("ask", a.clone()),
+        BotCommand::Jira => ("jira", String::new()),
+        BotCommand::Admin => ("admin", String::new()),
     };
     state.logger.info(
         "command received",
         Some(&serde_json::json!({ "cmd": cmd_name, "user_id": user_id, "chat_id": msg.chat.id.0 })),
     );
+    let uname = state
+        .user_names
+        .get(&user_id)
+        .map(|n| n.clone())
+        .unwrap_or_default();
+    state.audit_logger.log_action(
+        user_id,
+        &uname,
+        "command",
+        cmd_name,
+        Some(serde_json::json!({ "args": cmd_args })),
+    );
+
+    // Any new slash command cancels whatever the user was in the middle of.
+    clear_pending_states(&state, msg.chat.id.0);
 
     match cmd {
         BotCommand::Help => handle_help(bot, msg, state).await,
@@ -233,6 +260,7 @@ async fn dispatch_command(
                     bot,
                     msg.chat.id,
                     state,
+                    user_id,
                     args.trim(),
                 )
                 .await
@@ -267,6 +295,16 @@ async fn dispatch_callback(
             "unauthorized callback attempt",
             Some(&serde_json::json!({ "user_id": user_id })),
         );
+        let uname = format_user_name(&query.from);
+        let cb_data = query.data.as_deref().unwrap_or("").to_string();
+        state.audit_logger.log_action(
+            user_id,
+            &uname,
+            "unauthorized_callback",
+            "",
+            Some(serde_json::json!({ "data": cb_data })),
+        );
+        notify_admin_unauthorized(&bot, &state, &query.from, "callback").await;
         let _ = bot.answer_callback_query(query.id.clone()).await;
         return Ok(());
     }
@@ -275,6 +313,19 @@ async fn dispatch_callback(
     state.logger.debug(
         "callback received",
         Some(&serde_json::json!({ "data": data, "user_id": user_id })),
+    );
+    let cb_prefix = data.split(':').next().unwrap_or(&data);
+    let uname = state
+        .user_names
+        .get(&user_id)
+        .map(|n| n.clone())
+        .unwrap_or_else(|| format_user_name(&query.from));
+    state.audit_logger.log_action(
+        user_id,
+        &uname,
+        "callback",
+        cb_prefix,
+        Some(serde_json::json!({ "data": data })),
     );
 
     if data.starts_with("admin:") {
@@ -326,7 +377,7 @@ async fn dispatch_callback(
             };
             let _ = bot.answer_callback_query(query.id.clone()).await;
             return super::commands::solve::handle_branch_choice(
-                bot, chat_id, state, &choice, &issue_key,
+                bot, chat_id, state, user_id, &choice, &issue_key,
             )
             .await;
         }
@@ -383,6 +434,22 @@ async fn dispatch_message(
     allowed_ids: Arc<HashSet<i64>>,
 ) -> anyhow::Result<()> {
     if !is_authorized(&msg, &allowed_ids, &state) {
+        if let Some(u) = &msg.from {
+            state.logger.warn(
+                "unauthorized message attempt",
+                Some(&serde_json::json!({ "user_id": u.id.0, "chat_id": msg.chat.id.0 })),
+            );
+            let uname = format_user_name(u);
+            let preview = truncate_for_audit(msg.text().unwrap_or(""));
+            state.audit_logger.log_action(
+                u.id.0 as i64,
+                &uname,
+                "unauthorized_message",
+                "",
+                Some(serde_json::json!({ "text": preview })),
+            );
+            notify_admin_unauthorized(&bot, &state, u, "message").await;
+        }
         return Ok(());
     }
 
@@ -393,6 +460,66 @@ async fn dispatch_message(
 
     let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
     let chat_id = msg.chat.id.0;
+
+    let msg_context = {
+        let s = state.chat_states.get(&chat_id);
+        if s.as_deref()
+            .and_then(|s| s.pending_admin_action.as_ref())
+            .is_some()
+        {
+            "pending_admin_input"
+        } else if s
+            .as_deref()
+            .and_then(|s| s.pending_jira_action.as_ref())
+            .is_some()
+        {
+            "pending_jira_input"
+        } else if s
+            .as_deref()
+            .map(|s| {
+                s.pending_permissions
+                    .as_ref()
+                    .map(|p| p.awaiting_user_id_input)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+        {
+            "pending_permissions_input"
+        } else if s
+            .as_deref()
+            .and_then(|s| s.pending_comment.as_ref())
+            .is_some()
+        {
+            "pending_comment"
+        } else if s
+            .as_deref()
+            .map(|s| s.pending_ask.is_some())
+            .unwrap_or(false)
+        {
+            "pending_ask_input"
+        } else if s
+            .as_deref()
+            .map(|s| s.pending_slack_reply.is_some())
+            .unwrap_or(false)
+        {
+            "pending_slack_reply"
+        } else {
+            "freeform_message"
+        }
+    };
+    let uname = state
+        .user_names
+        .get(&user_id)
+        .map(|n| n.clone())
+        .unwrap_or_default();
+    let text_preview = truncate_for_audit(msg.text().unwrap_or(""));
+    state.audit_logger.log_action(
+        user_id,
+        &uname,
+        "message",
+        msg_context,
+        Some(serde_json::json!({ "text": text_preview })),
+    );
 
     // Check pending admin panel input (clone / add_project)
     let pending_admin = state
@@ -415,7 +542,7 @@ async fn dispatch_message(
             let state_ref = Arc::clone(&state);
             move |pk: &str| is_authorized_for_project(user_id, pk, &state_ref)
         };
-        return handle_jira_input(bot, msg, state, action, auth_check).await;
+        return handle_jira_input(bot, msg, state, user_id, action, auth_check).await;
     }
 
     // Check pending permissions: waiting for admin to type a target user ID.
@@ -519,6 +646,45 @@ fn format_user_name(u: &teloxide::types::User) -> String {
         name.push_str(&format!(" (@{})", un));
     }
     name
+}
+
+async fn notify_admin_unauthorized(
+    bot: &Bot,
+    state: &AppState,
+    user: &teloxide::types::User,
+    attempt: &str,
+) {
+    let admin_id = match state.config.telegram.admin_user_id {
+        Some(id) => id,
+        None => return,
+    };
+    let name = format_user_name(user);
+    let text = format!(
+        "\u{26a0}\u{fe0f} Unauthorized {attempt} attempt\nUser: {name}\nID: {}",
+        user.id.0
+    );
+    let _ = bot.send_message(ChatId(admin_id), text).await;
+}
+
+/// Caps message text at 300 chars for audit records so logs stay manageable.
+fn truncate_for_audit(text: &str) -> String {
+    let mut s: String = text.chars().take(300).collect();
+    if text.chars().count() > 300 {
+        s.push('…');
+    }
+    s
+}
+
+fn clear_pending_states(state: &Arc<AppState>, chat_id: i64) {
+    if let Some(mut cs) = state.chat_states.get_mut(&chat_id) {
+        cs.pending_comment = None;
+        cs.pending_ask = None;
+        cs.pending_jira_action = None;
+        cs.pending_admin_action = None;
+        cs.pending_slack_reply = None;
+        cs.pending_solve = None;
+        cs.pending_permissions = None;
+    }
 }
 
 fn is_authorized_for_project(user_id: i64, project_key: &str, state: &AppState) -> bool {

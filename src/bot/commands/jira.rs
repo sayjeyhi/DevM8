@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 
 use crate::bot::state::JiraPendingAction;
 use crate::bot::utils::project_key_from_args;
@@ -13,19 +13,44 @@ use super::{
     handle_comment, handle_create_confirm, handle_create_suggest, handle_move, handle_my_tickets,
     handle_solve,
 };
+use crate::bot::commands::jira_setup::{
+    handle_jira_clear, handle_jira_fav_status_done, handle_jira_fav_status_toggle,
+    handle_jira_fav_statuses_start, handle_jira_manage_project_done,
+    handle_jira_manage_project_toggle, handle_jira_projects_start, handle_jira_setup_input,
+    handle_jira_setup_project_done, handle_jira_setup_project_toggle, handle_jira_setup_start,
+    start_url_step,
+};
 
-pub async fn handle_jira(bot: Bot, msg: Message, _state: Arc<AppState>) -> Result<()> {
-    let keyboard = InlineKeyboardMarkup::new(vec![
+pub async fn handle_jira(bot: Bot, msg: Message, state: Arc<AppState>) -> Result<()> {
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let has_user_jira = state.has_user_jira(user_id);
+    let jira_account_label = if has_user_jira {
+        "🔧 My Jira ✓"
+    } else {
+        "🔧 My Jira"
+    };
+
+    let mut rows = vec![
         vec![
-            InlineKeyboardButton::callback("My Tickets", "jira:my_tickets"),
-            InlineKeyboardButton::callback("Create Issue", "jira:create"),
+            InlineKeyboardButton::callback("🎫 My Tickets", "jira:my_tickets"),
+            InlineKeyboardButton::callback("✏️ Create Issue", "jira:create"),
         ],
         vec![
-            InlineKeyboardButton::callback("Move Issue", "jira:move"),
-            InlineKeyboardButton::callback("Add Comment", "jira:comment"),
+            InlineKeyboardButton::callback("🔀 Move Issue", "jira:move"),
+            InlineKeyboardButton::callback("💬 Add Comment", "jira:comment"),
         ],
-        vec![InlineKeyboardButton::callback("Solve Issue", "jira:solve")],
-    ]);
+        vec![InlineKeyboardButton::callback(
+            "✅ Solve Issue",
+            "jira:solve",
+        )],
+    ];
+
+    rows.push(vec![InlineKeyboardButton::callback(
+        jira_account_label,
+        "jira:setup",
+    )]);
+
+    let keyboard = InlineKeyboardMarkup::new(rows);
 
     bot.send_message(msg.chat.id, "Jira — choose an action:")
         .reply_markup(keyboard)
@@ -61,6 +86,78 @@ pub async fn handle_jira_callback(
 
     let _ = bot.answer_callback_query(query.id).await;
 
+    // Setup callbacks
+    if data == "jira:setup" {
+        return handle_jira_setup_start(bot, chat_id, state, user_id).await;
+    }
+    if data == "jira:setup_reconnect" {
+        return start_url_step(&bot, chat_id, &state).await;
+    }
+    if data == "jira:setup_clear" {
+        return handle_jira_clear(bot, chat_id, state, user_id).await;
+    }
+
+    // Project picker callbacks (step 4 of setup)
+    if let Some(key) = data.strip_prefix("jira:setup_proj_toggle:") {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_setup_project_toggle(bot, chat_id, message_id, state, user_id, key)
+            .await;
+    }
+    if data == "jira:setup_proj_done" {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_setup_project_done(bot, chat_id, message_id, state, user_id).await;
+    }
+
+    // Manage-projects callbacks (post-setup project picker)
+    if data == "jira:projects" {
+        return handle_jira_projects_start(bot, chat_id, state, user_id).await;
+    }
+    if let Some(key) = data.strip_prefix("jira:manage_proj_toggle:") {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_manage_project_toggle(bot, chat_id, message_id, state, key).await;
+    }
+    if data == "jira:manage_proj_done" {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_manage_project_done(bot, chat_id, message_id, state, user_id).await;
+    }
+
+    // Favorite-statuses callbacks
+    if data == "jira:fav_statuses" {
+        return handle_jira_fav_statuses_start(bot, chat_id, state, user_id).await;
+    }
+    if let Some(name) = data.strip_prefix("jira:fav_status_toggle:") {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_fav_status_toggle(bot, chat_id, message_id, state, name).await;
+    }
+    if data == "jira:fav_status_done" {
+        let message_id = query
+            .message
+            .as_ref()
+            .map(|m| m.id())
+            .unwrap_or(MessageId(0));
+        return handle_jira_fav_status_done(bot, chat_id, message_id, state, user_id).await;
+    }
+
     // Step 3a: user confirmed Claude's description
     if data == "jira:create_confirm" {
         let pending = state
@@ -74,7 +171,8 @@ pub async fn handle_jira_callback(
                 .entry(chat_id.0)
                 .or_default()
                 .pending_jira_action = None;
-            return handle_create_confirm(bot, chat_id, state, &pk, &title, &suggested).await;
+            return handle_create_confirm(bot, chat_id, state, user_id, &pk, &title, &suggested)
+                .await;
         }
         return Ok(());
     }
@@ -180,11 +278,43 @@ pub async fn handle_jira_input(
     bot: Bot,
     msg: Message,
     state: Arc<AppState>,
+    user_id: i64,
     action: JiraPendingAction,
     is_authorized_for_project: impl Fn(&str) -> bool,
 ) -> Result<()> {
     let chat_id = msg.chat.id;
     let text = msg.text().unwrap_or("").trim().to_string();
+
+    // Setup steps don't clear pending action — they re-set it for the next step
+    match &action {
+        JiraPendingAction::JiraSetupUrl
+        | JiraPendingAction::JiraSetupEmail(_)
+        | JiraPendingAction::JiraSetupToken(_, _) => {
+            state
+                .chat_states
+                .entry(chat_id.0)
+                .or_default()
+                .pending_jira_action = None;
+            return handle_jira_setup_input(bot, chat_id, state, user_id, action, text).await;
+        }
+        JiraPendingAction::JiraSetupProjects(_, _, _, _, _)
+        | JiraPendingAction::JiraManageProjects(_, _)
+        | JiraPendingAction::JiraFavoriteStatuses(_, _) => {
+            // Selection is via inline buttons; restore state and guide user.
+            state
+                .chat_states
+                .entry(chat_id.0)
+                .or_default()
+                .pending_jira_action = Some(action.clone());
+            bot.send_message(
+                chat_id,
+                "Use the buttons above to make your selection, then tap ✓ Done.",
+            )
+            .await?;
+            return Ok(());
+        }
+        _ => {}
+    }
 
     // Clear current pending state (suggest step will re-set it to CreateDescription)
     state
@@ -196,12 +326,12 @@ pub async fn handle_jira_input(
     match action {
         // Step 2: title received → suggest description
         JiraPendingAction::CreateTitle(project_key) => {
-            handle_create_suggest(bot, chat_id, state, project_key, text).await
+            handle_create_suggest(bot, chat_id, state, user_id, project_key, text).await
         }
 
         // Step 3b: user sent their own description instead of using Claude's
         JiraPendingAction::CreateDescription(pk, title, _suggested) => {
-            handle_create_confirm(bot, chat_id, state, &pk, &title, &text).await
+            handle_create_confirm(bot, chat_id, state, user_id, &pk, &title, &text).await
         }
 
         JiraPendingAction::Move => {
@@ -212,7 +342,7 @@ pub async fn handle_jira_input(
                     return Ok(());
                 }
             }
-            handle_move(bot, chat_id, state, text).await
+            handle_move(bot, chat_id, state, user_id, text).await
         }
 
         JiraPendingAction::Comment => {
@@ -223,7 +353,7 @@ pub async fn handle_jira_input(
                     return Ok(());
                 }
             }
-            handle_comment(bot, chat_id, state, text).await
+            handle_comment(bot, chat_id, state, user_id, text).await
         }
 
         JiraPendingAction::Solve => {
@@ -234,7 +364,15 @@ pub async fn handle_jira_input(
                     return Ok(());
                 }
             }
-            handle_solve(bot, chat_id, state, text).await
+            handle_solve(bot, chat_id, state, user_id, text).await
         }
+
+        // Setup/manage/picker steps handled above
+        JiraPendingAction::JiraSetupUrl
+        | JiraPendingAction::JiraSetupEmail(_)
+        | JiraPendingAction::JiraSetupToken(_, _)
+        | JiraPendingAction::JiraSetupProjects(_, _, _, _, _)
+        | JiraPendingAction::JiraManageProjects(_, _)
+        | JiraPendingAction::JiraFavoriteStatuses(_, _) => Ok(()),
     }
 }

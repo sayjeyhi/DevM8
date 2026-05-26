@@ -6,6 +6,7 @@ pub mod comment;
 pub mod create;
 pub mod help;
 pub mod jira;
+pub mod jira_setup;
 pub mod logs;
 pub mod move_cmd;
 pub mod my_tickets;
@@ -21,7 +22,7 @@ pub use comment::{handle_comment, handle_pending_comment};
 pub use create::{handle_create_confirm, handle_create_suggest};
 pub use help::handle_help;
 pub use jira::{handle_jira, handle_jira_callback, handle_jira_input};
-pub use logs::handle_logs;
+pub use logs::{handle_audit_logs, handle_logs};
 pub use move_cmd::handle_move;
 pub use my_tickets::{handle_my_tickets, handle_my_tickets_callback};
 pub use permissions::{

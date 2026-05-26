@@ -12,6 +12,7 @@ pub async fn handle_comment(
     bot: Bot,
     chat_id: ChatId,
     state: Arc<AppState>,
+    user_id: i64,
     args: String,
 ) -> Result<()> {
     let args = args.trim().to_string();
@@ -34,7 +35,7 @@ pub async fn handle_comment(
         .logger
         .info("comment: adding comment", Some(&json!({ "key": &key })));
 
-    match state.jira.add_comment(&key, &text).await {
+    match state.jira_for_user(user_id).add_comment(&key, &text).await {
         Ok(()) => {
             state
                 .logger
@@ -61,6 +62,7 @@ pub async fn handle_pending_comment(
     state: Arc<AppState>,
     issue_key: String,
 ) -> Result<()> {
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
     let text = msg.text().unwrap_or("").trim().to_string();
     if text.is_empty() {
         bot.send_message(msg.chat.id, "Comment cannot be empty.")
@@ -77,7 +79,11 @@ pub async fn handle_pending_comment(
         Some(&json!({ "key": &issue_key })),
     );
 
-    match state.jira.add_comment(&issue_key, &text).await {
+    match state
+        .jira_for_user(user_id)
+        .add_comment(&issue_key, &text)
+        .await
+    {
         Ok(()) => {
             state.logger.info(
                 "comment: pending comment added",
