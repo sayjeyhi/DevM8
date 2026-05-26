@@ -33,14 +33,14 @@ pub async fn handle_jira(bot: Bot, msg: Message, state: Arc<AppState>) -> Result
     let mut rows = vec![
         vec![
             InlineKeyboardButton::callback("🎫 My Tickets", "jira:my_tickets"),
-            InlineKeyboardButton::callback("✏️ Create Issue", "jira:create"),
+            InlineKeyboardButton::callback("✏️ Create Ticket", "jira:create"),
         ],
         vec![
-            InlineKeyboardButton::callback("🔀 Move Issue", "jira:move"),
+            InlineKeyboardButton::callback("🔀 Move Ticket", "jira:move"),
             InlineKeyboardButton::callback("💬 Add Comment", "jira:comment"),
         ],
         vec![InlineKeyboardButton::callback(
-            "✅ Solve Issue",
+            "✅ Solve Ticket",
             "jira:solve",
         )],
     ];

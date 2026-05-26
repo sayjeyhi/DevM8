@@ -132,6 +132,19 @@ pub struct PendingGrill {
 }
 
 // ---------------------------------------------------------------------------
+// Post-analysis implement button state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct PendingPostAnalysis {
+    pub issue_key: String,
+    pub cwd: Option<String>,
+    pub git: Option<Arc<GitClient>>,
+    /// Q&A context from grill flow, if any.
+    pub qa_context: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Admin panel pending input
 // ---------------------------------------------------------------------------
 
@@ -217,6 +230,9 @@ pub struct ChatState {
 
     /// Active grill session — asking user clarifying questions one by one
     pub pending_grill: Option<PendingGrill>,
+
+    /// Analysis complete — waiting for user to click "Implement"
+    pub pending_post_analysis: Option<PendingPostAnalysis>,
 
     /// Active /permissions wizard
     pub pending_permissions: Option<PendingPermissions>,

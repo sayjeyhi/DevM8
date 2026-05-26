@@ -16,8 +16,8 @@ use super::commands::{
     handle_jira, handle_jira_callback, handle_jira_input, handle_my_tickets_callback,
     handle_pending_comment, handle_permissions_add, handle_permissions_back,
     handle_permissions_done, handle_permissions_revoke, handle_permissions_toggle,
-    handle_permissions_user_input, handle_permissions_user_select, handle_solve_action_callback,
-    handle_solve_branch_name_input, handle_solve_repo_callback,
+    handle_permissions_user_input, handle_permissions_user_select, handle_post_analysis_implement,
+    handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
 use super::AppState;
@@ -397,6 +397,16 @@ async fn dispatch_callback(
             .await;
         }
         return Ok(());
+    }
+
+    if let Some(issue_key) = data.strip_prefix("solve:post:implement:") {
+        let issue_key = issue_key.to_string();
+        let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let _ = bot.answer_callback_query(query.id.clone()).await;
+        return handle_post_analysis_implement(bot, chat_id, state, &issue_key).await;
     }
 
     if data.starts_with("solve:action:") {

@@ -87,6 +87,10 @@ async fn send_repo_ready_message(
     ];
     if !clean {
         rows.push(vec![InlineKeyboardButton::callback(
+            "✅ Commit changes",
+            "ask:commit",
+        )]);
+        rows.push(vec![InlineKeyboardButton::callback(
             "📦 Stash changes",
             "ask:stash_only",
         )]);
@@ -954,6 +958,14 @@ pub async fn handle_ask_session_callback(
                     .await
                     .unwrap_or_default();
                 typing.abort();
+
+                // Strip markdown code fences Claude sometimes wraps around the message
+                let suggestion = suggestion
+                    .trim()
+                    .trim_start_matches("```")
+                    .trim_end_matches("```")
+                    .trim()
+                    .to_string();
 
                 let repo_path = state
                     .chat_states
