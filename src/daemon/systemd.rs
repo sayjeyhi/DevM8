@@ -25,6 +25,7 @@ Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY CLAUDE_CONFIG_DIR
 
 [Install]
 WantedBy=default.target

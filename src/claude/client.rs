@@ -18,6 +18,30 @@ const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 const PROGRESS_INTERVAL_MS: u64 = 2_000;
 const SIGTERM_GRACE_MS: u64 = 2_000;
 
+/// Build the PATH string for the bwrap sandbox, appending the host's gh install directory
+/// when it is not already covered by the standard system PATH.
+#[cfg(target_os = "linux")]
+fn bwrap_path_with_gh() -> String {
+    const BASE: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+    let gh_dir = std::process::Command::new("which")
+        .arg("gh")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            std::path::Path::new(&p)
+                .parent()
+                .map(|d| d.to_string_lossy().to_string())
+        });
+    match gh_dir {
+        Some(dir) if !BASE.split(':').any(|s| s == dir.as_str()) => {
+            format!("{BASE}:{dir}")
+        }
+        _ => BASE.to_string(),
+    }
+}
+
 /// Bind-mount a path (and its canonical symlink target) that lives under /home back into a
 /// bwrap sandbox. Necessary because build_bwrap_base overlays /home with an empty tmpfs.
 ///
@@ -111,6 +135,12 @@ impl ClaudeClient {
                 // read-write so Claude can write refreshed OAuth tokens
                 cmd.args(["--bind", &claude_json, "/home/sandbox/.claude.json"]);
             }
+            // gh CLI auth config — hidden by tmpfs on /home without explicit bind
+            let gh_config = format!("{host_home}/.config/gh");
+            if std::path::Path::new(&gh_config).exists() {
+                cmd.args(["--dir", "/home/sandbox/.config"]);
+                cmd.args(["--ro-bind", &gh_config, "/home/sandbox/.config/gh"]);
+            }
         }
 
         let inner_cwd = if let Some(cwd) = cwd {
@@ -125,11 +155,8 @@ impl ClaudeClient {
         cmd.arg("--clearenv");
         cmd.args(["--setenv", "HOME", "/home/sandbox"]);
         cmd.args(["--setenv", "TMPDIR", "/tmp"]);
-        cmd.args([
-            "--setenv",
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        ]);
+        let bwrap_path = bwrap_path_with_gh();
+        cmd.args(["--setenv", "PATH", &bwrap_path]);
 
         let api_key = self
             .config
@@ -138,6 +165,11 @@ impl ClaudeClient {
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok());
         if let Some(ref key) = api_key {
             cmd.args(["--setenv", "ANTHROPIC_API_KEY", key]);
+        }
+        for key in &["GH_TOKEN", "GITHUB_TOKEN"] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.args(["--setenv", key, &val]);
+            }
         }
 
         cmd.args([
