@@ -32,7 +32,7 @@ The installer:
 
 ## Usage
 
-```
+```bash
 $ devm8
 DevM8 — Jira + Claude + Telegram assistant
 
