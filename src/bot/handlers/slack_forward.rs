@@ -176,7 +176,7 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                     let thinking = bot.send_message(chat_id, "Generating AI draft...").await?;
 
                     match state.claude.ask(&prompt, AskOptions::default()).await {
-                        Ok(draft) => {
+                        Ok((draft, _)) => {
                             state.logger.info(
                                 "slack: AI draft generated",
                                 Some(&json!({ "channel": &channel_id, "draft_len": draft.len() })),

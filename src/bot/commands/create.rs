@@ -72,7 +72,7 @@ pub async fn handle_create_suggest(
         .replace("{title}", &title);
 
     let claude_output = match state.claude.ask(&prompt, AskOptions::default()).await {
-        Ok(text) => text,
+        Ok((text, _)) => text,
         Err(e) => {
             state.logger.error(
                 &format!("create: Claude error: {e}"),
