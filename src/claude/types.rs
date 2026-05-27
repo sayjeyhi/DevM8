@@ -2,6 +2,41 @@
 
 use std::pin::Pin;
 
+/// Token usage and cost from a Claude response.
+#[derive(Debug, Clone, Default)]
+pub struct UsageInfo {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+}
+
+impl UsageInfo {
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens.is_none() && self.output_tokens.is_none() && self.cost_usd.is_none()
+    }
+
+    pub fn format_footer(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        match (self.input_tokens, self.output_tokens) {
+            (Some(i), Some(o)) => parts.push(format!("{i} in / {o} out tokens")),
+            (Some(i), None) => parts.push(format!("{i} in tokens")),
+            (None, Some(o)) => parts.push(format!("{o} out tokens")),
+            (None, None) => {}
+        }
+        if let Some(c) = self.cost_usd {
+            parts.push(format!("${c:.4}"));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" · "))
+        }
+    }
+}
+
 /// Configuration for the Claude CLI client.
 #[derive(Debug, Clone)]
 pub struct ClaudeClientConfig {

@@ -153,7 +153,7 @@ pub async fn solve_by_key(
     };
 
     let analysis = match state.claude.ask(&prompt, opts).await {
-        Ok(text) => text,
+        Ok((text, _)) => text,
         Err(e) => {
             state.logger.error(
                 &format!("solve: Claude error: {e}"),
@@ -317,7 +317,7 @@ async fn grill_by_key(
     };
 
     let first_q = match state.claude.ask(&prompt, opts).await {
-        Ok(text) => text.trim().to_string(),
+        Ok((text, _)) => text.trim().to_string(),
         Err(e) => {
             bot.edit_message_text(chat_id, status_msg_id, format!("Claude error: {}", e))
                 .await?;
@@ -403,7 +403,7 @@ pub async fn handle_grill_answer(
             ..AskOptions::default()
         };
         let next = match state.claude.ask(&prompt, opts).await {
-            Ok(t) => t.trim().to_string(),
+            Ok((t, _)) => t.trim().to_string(),
             Err(e) => {
                 state
                     .logger

@@ -232,8 +232,8 @@ pub async fn ask_with_session(
         ..AskOptions::default()
     };
 
-    let answer = match state.claude.ask(&prompt, opts).await {
-        Ok(a) => a,
+    let (answer, usage) = match state.claude.ask(&prompt, opts).await {
+        Ok(r) => r,
         Err(e) => {
             typing.abort();
             state.logger.error(&format!("ask: Claude error: {e}"), None);
@@ -278,9 +278,14 @@ pub async fn ask_with_session(
         bot.send_message(chat_id, chunk).await?;
     }
 
-    // Show "What next?" keyboard
+    // Show "What next?" keyboard with optional usage footer
     let keyboard = session_keyboard(pushed, git_opt.as_ref()).await;
-    bot.send_message(chat_id, "What would you like to do next?")
+    let next_text = match usage.format_footer() {
+        Some(f) => format!("What would you like to do next?\n<i>{}</i>", f),
+        None => "What would you like to do next?".to_string(),
+    };
+    bot.send_message(chat_id, next_text)
+        .parse_mode(ParseMode::Html)
         .reply_markup(keyboard)
         .await?;
 
@@ -968,6 +973,7 @@ pub async fn handle_ask_session_callback(
                         },
                     )
                     .await
+                    .map(|(t, _)| t)
                     .unwrap_or_default();
                 typing.abort();
 

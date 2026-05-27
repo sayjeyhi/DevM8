@@ -12,7 +12,7 @@ use tokio::time::{interval, timeout};
 use crate::logger::Logger;
 use crate::shared::errors::{AppError, ClaudeError};
 
-use super::types::{AskOptions, ClaudeClientConfig};
+use super::types::{AskOptions, ClaudeClientConfig, UsageInfo};
 
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 const PROGRESS_INTERVAL_MS: u64 = 2_000;
@@ -191,7 +191,11 @@ impl ClaudeClient {
         cmd
     }
 
-    pub async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<String, AppError> {
+    pub async fn ask(
+        &self,
+        prompt: &str,
+        opts: AskOptions,
+    ) -> Result<(String, UsageInfo), AppError> {
         let timeout_ms = opts
             .timeout_ms
             .or(self.config.timeout_ms)
@@ -266,19 +270,22 @@ impl ClaudeClient {
         let elapsed_ms = started.elapsed().as_millis() as u64;
 
         match result {
-            Ok(Ok((text, exit_code, stderr_text))) => {
+            Ok(Ok((text, exit_code, stderr_text, usage))) => {
                 if exit_code != 0 {
+                    let stdout_snippet = &text[..text.len().min(500)];
                     self.logger.error(
                         "claude: process exited with error",
                         Some(&json!({
                             "exit_code": exit_code,
                             "elapsed_ms": elapsed_ms,
                             "stderr": &stderr_text[..stderr_text.len().min(500)],
+                            "stdout": stdout_snippet,
                         })),
                     );
+                    let detail = if !text.is_empty() { text } else { stderr_text };
                     Err(AppError::Claude(ClaudeError::Exit {
                         exit_code,
-                        stderr: stderr_text,
+                        stderr: detail,
                     }))
                 } else {
                     self.logger.info(
@@ -288,7 +295,7 @@ impl ClaudeClient {
                             "response_len": text.len(),
                         })),
                     );
-                    Ok(text)
+                    Ok((text, usage))
                 }
             }
             Ok(Err(e)) => {
@@ -311,7 +318,7 @@ impl ClaudeClient {
     async fn stream_output(
         mut child: Child,
         on_progress: Option<super::types::ProgressCallback>,
-    ) -> Result<(String, i32, String), AppError> {
+    ) -> Result<(String, i32, String, UsageInfo), AppError> {
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
 
@@ -320,6 +327,7 @@ impl ClaudeClient {
 
         let mut text_lines: Vec<String> = Vec::new();
         let mut result_text: Option<String> = None;
+        let mut usage = UsageInfo::default();
 
         let mut progress_ticker = interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
         progress_ticker.tick().await;
@@ -338,7 +346,7 @@ impl ClaudeClient {
                     match line_result {
                         Ok(Some(line)) => {
                             if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                                Self::handle_event(&event, &mut text_lines, &mut result_text);
+                                Self::handle_event(&event, &mut text_lines, &mut result_text, &mut usage);
                             }
                         }
                         Ok(None) => break,
@@ -364,10 +372,15 @@ impl ClaudeClient {
             text_lines.join("\n")
         };
 
-        Ok((final_text, exit_code, stderr_lines.join("\n")))
+        Ok((final_text, exit_code, stderr_lines.join("\n"), usage))
     }
 
-    fn handle_event(event: &Value, text_lines: &mut Vec<String>, result_text: &mut Option<String>) {
+    fn handle_event(
+        event: &Value,
+        text_lines: &mut Vec<String>,
+        result_text: &mut Option<String>,
+        usage: &mut UsageInfo,
+    ) {
         let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
 
         match event_type {
@@ -398,6 +411,11 @@ impl ClaudeClient {
             "result" => {
                 if let Some(r) = event.get("result").and_then(Value::as_str) {
                     *result_text = Some(r.to_string());
+                }
+                usage.cost_usd = event.get("total_cost_usd").and_then(Value::as_f64);
+                if let Some(u) = event.get("usage") {
+                    usage.input_tokens = u.get("input_tokens").and_then(Value::as_u64);
+                    usage.output_tokens = u.get("output_tokens").and_then(Value::as_u64);
                 }
             }
             _ => {}
