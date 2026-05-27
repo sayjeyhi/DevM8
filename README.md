@@ -30,6 +30,33 @@ The installer:
 - **On Linux:** installs `bubblewrap` for Claude process sandboxing (see [Security](#security))
 - Runs the configuration wizard on first install (skipped in non-interactive environments)
 
+## Usage
+
+```
+$ devm8
+DevM8 — Jira + Claude + Telegram assistant
+
+Usage: devm8 <COMMAND>
+
+Commands:
+  daemon       Run the daemon process (internal — invoked by launchd)
+  start        Start the daemon (macOS: launchd, Linux: systemd)
+  stop         Stop the daemon
+  status       Show daemon status
+  logs         Show or follow daemon logs
+  config       Run the configuration wizard
+  update       Check for and apply binary updates
+  slackmap     Configure Slack integration
+  clone        Clone a repository via SSH
+  add-project  Add a local git repository as a project
+  version      Print version
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
 ## Requirements
 
 | Platform | Support |

@@ -105,6 +105,10 @@ impl ClaudeClient {
             if std::path::Path::new(&claude_dir).exists() {
                 cmd.args(["--ro-bind", &claude_dir, "/home/sandbox/.claude"]);
             }
+            let claude_json = format!("{host_home}/.claude.json");
+            if std::path::Path::new(&claude_json).exists() {
+                cmd.args(["--ro-bind", &claude_json, "/home/sandbox/.claude.json"]);
+            }
         }
 
         let inner_cwd = if let Some(cwd) = cwd {
