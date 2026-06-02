@@ -122,9 +122,40 @@ impl std::str::FromStr for LogLevel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
+    /// xoxp-… user token used by the legacy Slack poller (DM forwarding).
     pub user_token: String,
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
+
+    // ---- Slack Bot (Socket Mode) ----
+
+    /// xoxb-… Bot token.  Required for the interactive Slack bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_token: Option<String>,
+
+    /// xapp-… App-level token.  Required for Socket Mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_token: Option<String>,
+
+    /// Slack user IDs allowed to interact with the bot (e.g. ["U1234567"]).
+    /// Empty list = everyone in the workspace is allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_user_ids: Vec<String>,
+
+    /// Admin Slack user ID.  Only this user can run admin commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_user_id: Option<String>,
+
+    /// Per-project access: project key → list of allowed Slack user IDs.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub project_access: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl SlackConfig {
+    /// Returns true if the Slack bot (Socket Mode) is fully configured.
+    pub fn bot_enabled(&self) -> bool {
+        self.bot_token.is_some() && self.app_token.is_some()
+    }
 }
 
 fn default_poll_interval_ms() -> u64 {

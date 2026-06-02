@@ -34,3 +34,5 @@ dashmap = "6"
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 futures-util = "0.3"
 bytes = "1"
+async-trait = "0.1"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }

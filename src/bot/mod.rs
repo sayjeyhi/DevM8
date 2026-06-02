@@ -37,8 +37,11 @@ pub struct AppState {
     /// Claude CLI client.
     pub claude: Arc<ClaudeClient>,
 
-    /// Per-chat mutable state.
+    /// Per-chat mutable state (Telegram).
     pub chat_states: DashMap<i64, state::ChatState>,
+
+    /// Per-chat mutable state for Slack (keyed by Slack channel/user ID string).
+    pub slack_chat_states: DashMap<String, crate::channel::state::ChatState>,
 
     /// Resolved application configuration.
     pub config: AppConfig,
@@ -58,22 +61,84 @@ pub struct AppState {
     /// Telegram bot username (e.g. "MyBot"), used to generate deep links.
     pub bot_username: String,
 
-    /// Live project-access map (project key → allowed user IDs).
+    /// Live project-access map (project key → allowed Telegram user IDs).
     /// Wraps a copy of config.telegram.project_access and is updated at
     /// runtime by /permissions without requiring a daemon restart.
     pub project_access: RwLock<HashMap<String, Vec<i64>>>,
 
-    /// Cache of user_id → display name, populated whenever a user sends a message.
+    /// Slack project-access map (project key → allowed Slack user IDs).
+    pub slack_project_access: RwLock<HashMap<String, Vec<String>>>,
+
+    /// Cache of Telegram user_id → display name.
     pub user_names: DashMap<i64, String>,
+
+    /// Cache of Slack user_id → display name.
+    pub slack_user_names: DashMap<String, String>,
 }
 
 impl AppState {
+    // ---- Telegram authorization ----
+
     pub fn is_admin(&self, user_id: i64) -> bool {
         match self.config.telegram.admin_user_id {
             Some(admin_id) => user_id == admin_id,
             None => true,
         }
     }
+
+    pub fn is_authorized_for_project(&self, user_id: i64, project_key: &str) -> bool {
+        if self.is_admin(user_id) {
+            return true;
+        }
+        let access = self.project_access.read().unwrap();
+        if access.is_empty() {
+            return true;
+        }
+        let is_restricted = access.values().any(|ids| ids.contains(&user_id));
+        match access.get(project_key) {
+            None => !is_restricted,
+            Some(ids) => ids.contains(&user_id),
+        }
+    }
+
+    // ---- Slack authorization ----
+
+    pub fn slack_is_authorized(&self, user_id: &str) -> bool {
+        if let Some(sc) = &self.config.slack {
+            if sc.allowed_user_ids.is_empty() {
+                return true;
+            }
+            sc.allowed_user_ids.iter().any(|id| id == user_id)
+        } else {
+            false
+        }
+    }
+
+    pub fn slack_is_admin(&self, user_id: &str) -> bool {
+        self.config
+            .slack
+            .as_ref()
+            .and_then(|sc| sc.admin_user_id.as_deref())
+            .map(|admin| admin == user_id)
+            .unwrap_or(false)
+    }
+
+    pub fn slack_is_authorized_for_project(&self, user_id: &str, project_key: &str) -> bool {
+        if self.slack_is_admin(user_id) {
+            return true;
+        }
+        let access = self.slack_project_access.read().unwrap();
+        if access.is_empty() {
+            return true;
+        }
+        let is_restricted = access.values().any(|ids| ids.iter().any(|id| id == user_id));
+        match access.get(project_key) {
+            None => !is_restricted,
+            Some(ids) => ids.iter().any(|id| id == user_id),
+        }
+    }
+
+    // ---- Telegram Jira helpers ----
 
     /// Returns the per-user Jira client, or the global fallback if configured.
     pub fn jira_for_user(&self, user_id: i64) -> Option<Arc<JiraClient>> {
@@ -215,6 +280,14 @@ impl AppState {
 
         let project_access = RwLock::new(config.telegram.project_access.clone());
 
+        let slack_project_access = RwLock::new(
+            config
+                .slack
+                .as_ref()
+                .map(|sc| sc.project_access.clone())
+                .unwrap_or_default(),
+        );
+
         let audit_logger = Arc::new(AuditLogger::new(&PATHS.audit_log_file));
 
         Ok(Self {
@@ -222,6 +295,7 @@ impl AppState {
             user_jira_clients,
             claude,
             chat_states: DashMap::new(),
+            slack_chat_states: DashMap::new(),
             config,
             logger,
             audit_logger,
@@ -229,7 +303,9 @@ impl AppState {
             slack,
             bot_username,
             project_access,
+            slack_project_access,
             user_names: DashMap::new(),
+            slack_user_names: DashMap::new(),
         })
     }
 }

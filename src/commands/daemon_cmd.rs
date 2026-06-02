@@ -116,6 +116,32 @@ pub async fn daemon_command() -> Result<(), AppError> {
     loop {
         let ct = CancellationToken::new();
 
+        // Spawn the Slack Socket Mode bot as a fire-and-forget task.
+        // If it fails, we log the error but keep the Telegram bot running.
+        {
+            use crate::bot::AppState;
+            let ct_slack = ct.clone();
+            let config_clone = config.clone();
+            let logger_slack = Arc::clone(&logger);
+            tokio::spawn(async move {
+                let state = match AppState::new(config_clone, Arc::clone(&logger_slack), String::new()) {
+                    Ok(s) => Arc::new(s),
+                    Err(e) => {
+                        logger_slack.error(
+                            &format!("slack bot: failed to build AppState: {e}"),
+                            None,
+                        );
+                        return;
+                    }
+                };
+                if let Err(e) =
+                    crate::slack_bot::bot::start_slack_bot(ct_slack, state, &logger_slack).await
+                {
+                    logger_slack.error(&format!("slack bot error: {e}"), None);
+                }
+            });
+        }
+
         #[cfg(unix)]
         let control = {
             let ct_clone = ct.clone();
