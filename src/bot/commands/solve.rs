@@ -2,14 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::{
     AskSession, ChatState, PendingGrill, PendingPostAnalysis, PendingSolve, PendingSolveAction,
 };
-use crate::bot::utils::{escape_html, keep_typing, split_message};
 use crate::bot::AppState;
+use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
 
 const GRILL_FIRST_Q_PROMPT: &str = "\
@@ -56,10 +54,10 @@ Please provide:
 Be specific, technical, and actionable. Format your response clearly.";
 
 pub async fn solve_by_key(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     issue_key: &str,
     cwd: Option<String>,
 ) -> Result<()> {
@@ -68,40 +66,45 @@ pub async fn solve_by_key(
         Some(&json!({ "key": issue_key, "cwd": cwd.as_deref().unwrap_or("(none)") })),
     );
 
-    let status_msg = bot
-        .send_message(
+    let status_ref = sender
+        .send(
             chat_id,
-            format!("Analyzing <b>{}</b> with Claude...", escape_html(issue_key)),
+            &format!(
+                "Analyzing <b>{}</b> with Claude...",
+                sender.escape(issue_key)
+            ),
         )
-        .parse_mode(ParseMode::Html)
         .await?;
-
-    let status_msg_id = status_msg.id;
-    let _typing = keep_typing(bot.clone(), chat_id);
+    let typing = sender.start_typing(chat_id);
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.edit_message_text(
-            chat_id,
-            status_msg_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        typing.abort();
+        sender
+            .edit_text(
+                &status_ref,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let issue = match jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
+            typing.abort();
             state.logger.error(
                 &format!("solve: failed to fetch issue: {e}"),
                 Some(&json!({ "key": issue_key })),
             );
-            bot.edit_message_text(
-                chat_id,
-                status_msg_id,
-                format!("Could not fetch <b>{}</b>: {}", escape_html(issue_key), e),
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .edit_text(
+                    &status_ref,
+                    &format!(
+                        "Could not fetch <b>{}</b>: {}",
+                        sender.escape(issue_key),
+                        e
+                    ),
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -117,32 +120,30 @@ pub async fn solve_by_key(
         .replace("{status}", &issue.status)
         .replace("{description}", &issue.description);
 
-    let bot_progress = bot.clone();
-    let chat_id_progress = chat_id;
-    let msg_id_progress = status_msg_id;
+    let sender_cb = Arc::clone(&sender);
+    let status_ref_cb = status_ref.clone();
     let key_progress = issue_key.to_string();
 
     let on_progress: crate::claude::types::ProgressCallback =
         Box::new(move |lines: Vec<String>| {
-            let bot = bot_progress.clone();
-            let chat_id = chat_id_progress;
-            let msg_id = msg_id_progress;
+            let sender = Arc::clone(&sender_cb);
+            let sref = status_ref_cb.clone();
             let key = key_progress.clone();
             let preview = lines.join("").chars().take(200).collect::<String>();
             Box::pin(async move {
                 let text = if preview.is_empty() {
-                    format!("Analyzing <b>{}</b> with Claude...", escape_html(&key))
+                    format!(
+                        "Analyzing <b>{}</b> with Claude...",
+                        sender.escape(&key)
+                    )
                 } else {
                     format!(
                         "Analyzing <b>{}</b>...\n\n<pre>{}</pre>",
-                        escape_html(&key),
-                        escape_html(&preview)
+                        sender.escape(&key),
+                        sender.escape(&preview)
                     )
                 };
-                let _ = bot
-                    .edit_message_text(chat_id, msg_id, text)
-                    .parse_mode(ParseMode::Html)
-                    .await;
+                let _ = sender.edit_text(&sref, &text).await;
             })
         });
 
@@ -159,24 +160,24 @@ pub async fn solve_by_key(
                 &format!("solve: Claude error: {e}"),
                 Some(&json!({ "key": issue_key })),
             );
-            bot.edit_message_text(chat_id, status_msg_id, format!("Claude error: {}", e))
+            sender
+                .edit_text(&status_ref, &format!("Claude error: {}", e))
                 .await?;
             return Ok(());
         }
     };
 
-    bot.edit_message_text(
-        chat_id,
-        status_msg_id,
-        format!("Analysis complete for <b>{}</b>", escape_html(issue_key)),
-    )
-    .parse_mode(ParseMode::Html)
-    .await?;
+    sender
+        .edit_text(
+            &status_ref,
+            &format!(
+                "Analysis complete for <b>{}</b>",
+                sender.escape(issue_key)
+            ),
+        )
+        .await?;
 
-    let chunks = split_message(&analysis, 4096);
-    for chunk in &chunks {
-        bot.send_message(chat_id, chunk).await?;
-    }
+    sender.send_in_chunks(chat_id, &analysis).await?;
 
     state.logger.info(
         "solve: posting analysis as Jira comment",
@@ -202,35 +203,35 @@ pub async fn solve_by_key(
 }
 
 pub async fn show_solve_action_picker(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     issue_key: &str,
     cwd: Option<String>,
     git: Option<Arc<crate::git::GitClient>>,
 ) -> Result<()> {
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_solve_action = Some(PendingSolveAction { cwd, git });
     }
 
-    let keyboard = InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::callback(
-            format!("🔍 Analyze {}", issue_key),
+    let keyboard = vec![
+        vec![Button::new(
+            format!("\u{1f50d} Analyze {}", issue_key),
             format!("solve:action:analyze:{}", issue_key),
         )],
-        vec![InlineKeyboardButton::callback(
-            "🎯 Grill me".to_string(),
+        vec![Button::new(
+            "\u{1f3af} Grill me".to_string(),
             format!("solve:action:grill:{}", issue_key),
         )],
-        vec![InlineKeyboardButton::callback(
-            "🚀 Analyze & implement".to_string(),
+        vec![Button::new(
+            "\u{1f680} Analyze & implement".to_string(),
             format!("solve:action:implement:{}", issue_key),
         )],
-    ]);
+    ];
 
-    bot.send_message(chat_id, "What would you like to do?")
-        .reply_markup(keyboard)
+    sender
+        .send_with_keyboard(chat_id, "What would you like to do?", keyboard)
         .await?;
 
     Ok(())
@@ -254,10 +255,10 @@ fn build_qa_history(qa: &[(String, String)]) -> String {
 }
 
 async fn grill_by_key(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     issue_key: &str,
     cwd: Option<String>,
     git: Option<Arc<crate::git::GitClient>>,
@@ -267,38 +268,39 @@ async fn grill_by_key(
         Some(&json!({ "key": issue_key })),
     );
 
-    let status_msg = bot
-        .send_message(
+    let status_ref = sender
+        .send(
             chat_id,
-            format!(
+            &format!(
                 "Analyzing <b>{}</b> before asking questions...",
-                escape_html(issue_key)
+                sender.escape(issue_key)
             ),
         )
-        .parse_mode(ParseMode::Html)
         .await?;
-    let status_msg_id = status_msg.id;
-    let _typing = keep_typing(bot.clone(), chat_id);
+    let _typing = sender.start_typing(chat_id);
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.edit_message_text(
-            chat_id,
-            status_msg_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .edit_text(
+                &status_ref,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let issue = match jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
         Err(e) => {
-            bot.edit_message_text(
-                chat_id,
-                status_msg_id,
-                format!("Could not fetch <b>{}</b>: {}", escape_html(issue_key), e),
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .edit_text(
+                    &status_ref,
+                    &format!(
+                        "Could not fetch <b>{}</b>: {}",
+                        sender.escape(issue_key),
+                        e
+                    ),
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -319,24 +321,22 @@ async fn grill_by_key(
     let first_q = match state.claude.ask(&prompt, opts).await {
         Ok((text, _)) => text.trim().to_string(),
         Err(e) => {
-            bot.edit_message_text(chat_id, status_msg_id, format!("Claude error: {}", e))
+            sender
+                .edit_text(&status_ref, &format!("Claude error: {}", e))
                 .await?;
             return Ok(());
         }
     };
 
     if first_q.is_empty() {
-        bot.edit_message_text(
-            chat_id,
-            status_msg_id,
-            "Could not generate question. Try again.",
-        )
-        .await?;
+        sender
+            .edit_text(&status_ref, "Could not generate question. Try again.")
+            .await?;
         return Ok(());
     }
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_grill = Some(PendingGrill {
             issue_key: issue_key.to_string(),
             issue_context,
@@ -347,35 +347,33 @@ async fn grill_by_key(
         });
     }
 
-    bot.edit_message_text(
-        chat_id,
-        status_msg_id,
-        format!(
-            "Let me ask a few questions before we start.\n\n<b>Q1:</b> {}",
-            escape_html(&first_q)
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .await?;
+    sender
+        .edit_text(
+            &status_ref,
+            &format!(
+                "Let me ask a few questions before we start.\n\n<b>Q1:</b> {}",
+                sender.escape(&first_q)
+            ),
+        )
+        .await?;
 
     Ok(())
 }
 
 pub async fn handle_grill_answer(
-    bot: Bot,
-    msg: Message,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    answer: String,
 ) -> Result<()> {
-    let chat_id = msg.chat.id;
-    let answer = msg.text().unwrap_or("").trim().to_string();
     if answer.is_empty() {
         return Ok(());
     }
 
     let grill = match state
         .chat_states
-        .get(&chat_id.0)
+        .get(chat_id)
         .and_then(|cs| cs.pending_grill.clone())
     {
         Some(g) => g,
@@ -397,7 +395,7 @@ pub async fn handle_grill_answer(
             .replace("{issue_context}", &updated.issue_context)
             .replace("{qa_history}", &qa_history_str);
 
-        let typing = keep_typing(bot.clone(), chat_id);
+        let _typing = sender.start_typing(chat_id);
         let opts = AskOptions {
             cwd: updated.cwd.clone(),
             ..AskOptions::default()
@@ -411,43 +409,46 @@ pub async fn handle_grill_answer(
                 String::new()
             }
         };
-        typing.abort();
 
         if next.eq_ignore_ascii_case("done") || next.is_empty() {
-            if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+            if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
                 cs.pending_grill = None;
             }
-            complete_grill(bot, chat_id, state, user_id, updated).await?;
+            complete_grill(Arc::clone(&sender), chat_id, state, user_id, updated).await?;
             return Ok(());
         }
 
         updated.current_question = next.clone();
         {
-            let mut entry = state.chat_states.entry(chat_id.0).or_default();
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
             entry.pending_grill = Some(updated);
         }
 
-        bot.send_message(
-            chat_id,
-            format!("<b>Q{}:</b> {}", q_count + 1, escape_html(&next)),
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
+        sender
+            .send(
+                chat_id,
+                &format!(
+                    "<b>Q{}:</b> {}",
+                    q_count + 1,
+                    sender.escape(&next)
+                ),
+            )
+            .await?;
     } else {
-        if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+        if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
             cs.pending_grill = None;
         }
-        complete_grill(bot, chat_id, state, user_id, updated).await?;
+        complete_grill(Arc::clone(&sender), chat_id, state, user_id, updated).await?;
     }
 
     Ok(())
 }
 
 async fn complete_grill(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     grill: PendingGrill,
 ) -> Result<()> {
     let mut qa_context = String::from("Clarifying Q&A gathered before implementation:\n\n");
@@ -459,7 +460,7 @@ async fn complete_grill(
     );
 
     solve_by_key(
-        bot.clone(),
+        Arc::clone(&sender),
         chat_id,
         state.clone(),
         user_id,
@@ -469,7 +470,7 @@ async fn complete_grill(
     .await?;
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_post_analysis = Some(PendingPostAnalysis {
             issue_key: grill.issue_key.clone(),
             git: grill.git.clone(),
@@ -477,28 +478,32 @@ async fn complete_grill(
         });
     }
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "⚡ Implement".to_string(),
+    let keyboard = vec![vec![Button::new(
+        "\u{26a1} Implement".to_string(),
         format!("solve:post:implement:{}", grill.issue_key),
-    )]]);
-    bot.send_message(chat_id, "All questions answered. Ready to implement?")
-        .reply_markup(keyboard)
+    )]];
+    sender
+        .send_with_keyboard(
+            chat_id,
+            "All questions answered. Ready to implement?",
+            keyboard,
+        )
         .await?;
 
     Ok(())
 }
 
 pub async fn handle_solve_action_callback(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     action: &str,
     issue_key: &str,
 ) -> Result<()> {
     let pending = state
         .chat_states
-        .get(&chat_id.0)
+        .get(chat_id)
         .and_then(|cs| cs.pending_solve_action.clone());
 
     let (cwd, git) = match pending {
@@ -506,14 +511,14 @@ pub async fn handle_solve_action_callback(
         None => (None, None),
     };
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         cs.pending_solve_action = None;
     }
 
     match action {
         "analyze" => {
             solve_by_key(
-                bot.clone(),
+                Arc::clone(&sender),
                 chat_id,
                 state.clone(),
                 user_id,
@@ -522,26 +527,26 @@ pub async fn handle_solve_action_callback(
             )
             .await?;
             {
-                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 entry.pending_post_analysis = Some(PendingPostAnalysis {
                     issue_key: issue_key.to_string(),
                     git,
                     qa_context: None,
                 });
             }
-            let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-                "⚡ Implement".to_string(),
+            let keyboard = vec![vec![Button::new(
+                "\u{26a1} Implement".to_string(),
                 format!("solve:post:implement:{}", issue_key),
-            )]]);
-            bot.send_message(chat_id, "Ready to implement?")
-                .reply_markup(keyboard)
+            )]];
+            sender
+                .send_with_keyboard(chat_id, "Ready to implement?", keyboard)
                 .await?;
             Ok(())
         }
-        "grill" => grill_by_key(bot, chat_id, state, user_id, issue_key, cwd, git).await,
+        "grill" => grill_by_key(sender, chat_id, state, user_id, issue_key, cwd, git).await,
         "implement" => {
             solve_by_key(
-                bot.clone(),
+                Arc::clone(&sender),
                 chat_id,
                 state.clone(),
                 user_id,
@@ -552,17 +557,19 @@ pub async fn handle_solve_action_callback(
             let session = if let Some(mg) = git {
                 state.worktree_session(user_id, mg).await
             } else {
-                AskSession::new(user_id, None, None)
+                let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
+                AskSession::new(uid_i64, None, None)
             };
             {
-                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 entry.ask_session = Some(session);
             }
-            bot.send_message(
-                chat_id,
-                "Implementation session started. Send a message to continue.",
-            )
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Implementation session started. Send a message to continue.",
+                )
+                .await?;
             Ok(())
         }
         _ => Ok(()),
@@ -570,10 +577,10 @@ pub async fn handle_solve_action_callback(
 }
 
 pub async fn handle_repo_picker(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
@@ -585,7 +592,15 @@ pub async fn handle_repo_picker(
             "solve: no repos configured, solving without git context",
             Some(&json!({ "key": issue_key })),
         );
-        return show_solve_action_picker(bot, chat_id, state, issue_key, None, None).await;
+        return show_solve_action_picker(
+            Arc::clone(&sender),
+            chat_id,
+            state,
+            issue_key,
+            None,
+            None,
+        )
+        .await;
     }
 
     if repos.len() == 1 {
@@ -593,7 +608,7 @@ pub async fn handle_repo_picker(
             "solve: single repo, proceeding to branch picker",
             Some(&json!({ "key": issue_key, "repo": repos[0].repo_path.display().to_string() })),
         );
-        if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+        if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
             cs.pending_solve = Some(PendingSolve {
                 issue_key: issue_key.to_string(),
                 git: Some(Arc::clone(&repos[0])),
@@ -601,7 +616,7 @@ pub async fn handle_repo_picker(
             });
         } else {
             state.chat_states.insert(
-                chat_id.0,
+                chat_id.to_string(),
                 ChatState {
                     pending_solve: Some(PendingSolve {
                         issue_key: issue_key.to_string(),
@@ -612,7 +627,7 @@ pub async fn handle_repo_picker(
                 },
             );
         }
-        return handle_branch_picker(bot, chat_id, state, user_id).await;
+        return handle_branch_picker(Arc::clone(&sender), chat_id, state, user_id).await;
     }
 
     state.logger.info(
@@ -620,7 +635,7 @@ pub async fn handle_repo_picker(
         Some(&json!({ "key": issue_key, "repo_count": repos.len() })),
     );
 
-    let buttons: Vec<Vec<InlineKeyboardButton>> = repos
+    let buttons: Vec<Vec<Button>> = repos
         .iter()
         .enumerate()
         .map(|(i, git)| {
@@ -630,45 +645,45 @@ pub async fn handle_repo_picker(
                 .and_then(|n| n.to_str())
                 .unwrap_or("repo")
                 .to_string();
-            vec![InlineKeyboardButton::callback(
+            vec![Button::new(
                 label,
                 format!("solve:repo:{}:{}", issue_key, i),
             )]
         })
         .collect();
 
-    let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(
-        chat_id,
-        format!(
-            "Select the repository to use for <b>{}</b>:",
-            escape_html(issue_key)
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(keyboard)
-    .await?;
+    sender
+        .send_with_keyboard(
+            chat_id,
+            &format!(
+                "Select the repository to use for <b>{}</b>:",
+                sender.escape(issue_key)
+            ),
+            buttons,
+        )
+        .await?;
 
     Ok(())
 }
 
 pub async fn handle_branch_picker(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    _user_id: i64,
+    _user_id: &str,
 ) -> Result<()> {
     let pending = {
         state
             .chat_states
-            .get(&chat_id.0)
+            .get(chat_id)
             .and_then(|cs| cs.pending_solve.clone())
     };
 
     let (issue_key, git) = match pending {
         Some(p) => (p.issue_key, p.git),
         None => {
-            bot.send_message(chat_id, "No pending solve action.")
+            sender
+                .send(chat_id, "No pending solve action.")
                 .await?;
             return Ok(());
         }
@@ -697,17 +712,17 @@ pub async fn handle_branch_picker(
     let clean_label = if is_clean { "" } else { " (dirty)" };
     let text = format!(
         "Repository is on branch: <b>{}{}</b>\n\nHow would you like to proceed?",
-        escape_html(&current_branch),
+        sender.escape(&current_branch),
         clean_label
     );
 
-    let mut buttons: Vec<Vec<InlineKeyboardButton>> = vec![
-        vec![InlineKeyboardButton::callback(
-            "🌿 New branch (from main)".to_string(),
+    let mut buttons: Vec<Vec<Button>> = vec![
+        vec![Button::new(
+            "\u{1f33f} New branch (from main)".to_string(),
             format!("solve:branch:new:{}", issue_key),
         )],
-        vec![InlineKeyboardButton::callback(
-            "📌 Stay on current branch",
+        vec![Button::new(
+            "\u{1f4cc} Stay on current branch",
             format!("solve:branch:curr:{}", issue_key),
         )],
     ];
@@ -715,41 +730,37 @@ pub async fn handle_branch_picker(
     if !is_clean {
         buttons.insert(
             0,
-            vec![InlineKeyboardButton::callback(
-                "📤 Commit & push (same branch)",
+            vec![Button::new(
+                "\u{1f4e4} Commit & push (same branch)",
                 format!("solve:branch:commitpush:{}", issue_key),
             )],
         );
         buttons.insert(
             0,
-            vec![InlineKeyboardButton::callback(
-                "📦 Stash changes & new branch",
+            vec![Button::new(
+                "\u{1f4e6} Stash changes & new branch",
                 format!("solve:branch:stash:{}", issue_key),
             )],
         );
     }
 
-    let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(keyboard)
-        .await?;
+    sender.send_with_keyboard(chat_id, &text, buttons).await?;
 
     Ok(())
 }
 
 pub async fn handle_branch_choice(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    _user_id: i64,
+    _user_id: &str,
     choice: &str,
     issue_key: &str,
 ) -> Result<()> {
     let pending = {
         state
             .chat_states
-            .get(&chat_id.0)
+            .get(chat_id)
             .and_then(|cs| cs.pending_solve.clone())
     };
 
@@ -779,11 +790,13 @@ pub async fn handle_branch_choice(
                         &format!("solve: stash failed: {e}"),
                         Some(&json!({ "key": issue_key })),
                     );
-                    bot.send_message(chat_id, format!("Failed to stash: {e}"))
+                    sender
+                        .send(chat_id, &format!("Failed to stash: {e}"))
                         .await?;
                     return Ok(());
                 }
-                let branch_name = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let branch_name =
+                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
                 state.logger.info(
                     "solve: creating branch",
                     Some(&json!({ "key": issue_key, "branch": &branch_name })),
@@ -796,35 +809,37 @@ pub async fn handle_branch_choice(
                         &format!("solve: branch creation failed after stash: {e}"),
                         Some(&json!({ "key": issue_key, "branch": &branch_name })),
                     );
-                    bot.send_message(
-                        chat_id,
-                        format!("Stashed, but failed to create branch: {e}"),
-                    )
-                    .await?;
+                    sender
+                        .send(
+                            chat_id,
+                            &format!("Stashed, but failed to create branch: {e}"),
+                        )
+                        .await?;
                     return Ok(());
                 }
                 state.logger.info(
                     "solve: stashed and created branch",
                     Some(&json!({ "key": issue_key, "branch": &branch_name })),
                 );
-                bot.send_message(
-                    chat_id,
-                    format!(
-                        "Changes stashed. Created branch <b>{}</b>.",
-                        escape_html(&branch_name)
-                    ),
-                )
-                .parse_mode(ParseMode::Html)
-                .await?;
+                sender
+                    .send(
+                        chat_id,
+                        &format!(
+                            "Changes stashed. Created branch <b>{}</b>.",
+                            sender.escape(&branch_name)
+                        ),
+                    )
+                    .await?;
             }
             "new" => {
-                let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let suggested =
+                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
                 state.logger.info(
                     "solve: awaiting branch name confirmation",
                     Some(&json!({ "key": issue_key, "suggested": &suggested })),
                 );
                 {
-                    let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                    let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                     if let Some(ref mut ps) = entry.pending_solve {
                         ps.awaiting_branch_name = true;
                     } else {
@@ -835,15 +850,15 @@ pub async fn handle_branch_choice(
                         });
                     }
                 }
-                bot.send_message(
-                    chat_id,
-                    format!(
-                        "Suggested branch name: <code>{}</code>\n\nSend a name to use it, or type a different one:",
-                        escape_html(&suggested)
-                    ),
-                )
-                .parse_mode(ParseMode::Html)
-                .await?;
+                sender
+                    .send(
+                        chat_id,
+                        &format!(
+                            "Suggested branch name: <code>{}</code>\n\nSend a name to use it, or type a different one:",
+                            sender.escape(&suggested)
+                        ),
+                    )
+                    .await?;
                 return Ok(());
             }
             "commitpush" => {
@@ -854,17 +869,20 @@ pub async fn handle_branch_choice(
                 let commit_msg =
                     format!("chore: save work in progress before solving {}", issue_key);
                 if let Err(e) = g.stage_all().await {
-                    bot.send_message(chat_id, format!("Failed to stage changes: {e}"))
+                    sender
+                        .send(chat_id, &format!("Failed to stage changes: {e}"))
                         .await?;
                     return Ok(());
                 }
                 if let Err(e) = g.commit(&commit_msg).await {
-                    bot.send_message(chat_id, format!("Failed to commit: {e}"))
+                    sender
+                        .send(chat_id, &format!("Failed to commit: {e}"))
                         .await?;
                     return Ok(());
                 }
                 if let Err(e) = g.push("origin").await {
-                    bot.send_message(chat_id, format!("Failed to push: {e}"))
+                    sender
+                        .send(chat_id, &format!("Failed to push: {e}"))
                         .await?;
                     return Ok(());
                 }
@@ -872,15 +890,15 @@ pub async fn handle_branch_choice(
                     "solve: committed and pushed",
                     Some(&json!({ "key": issue_key })),
                 );
-                bot.send_message(
-                    chat_id,
-                    format!(
-                        "Committed and pushed: <code>{}</code>",
-                        escape_html(&commit_msg)
-                    ),
-                )
-                .parse_mode(ParseMode::Html)
-                .await?;
+                sender
+                    .send(
+                        chat_id,
+                        &format!(
+                            "Committed and pushed: <code>{}</code>",
+                            sender.escape(&commit_msg)
+                        ),
+                    )
+                    .await?;
             }
             _ => {
                 state.logger.info(
@@ -891,28 +909,27 @@ pub async fn handle_branch_choice(
         }
     }
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         cs.pending_solve = None;
     }
 
-    show_solve_action_picker(bot, chat_id, state, issue_key, cwd, git).await
+    show_solve_action_picker(Arc::clone(&sender), chat_id, state, issue_key, cwd, git).await
 }
 
 pub async fn handle_solve_branch_name_input(
-    bot: Bot,
-    msg: Message,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    _user_id: i64,
+    _user_id: &str,
+    branch_name: String,
 ) -> Result<()> {
-    let chat_id = msg.chat.id;
-    let branch_name = msg.text().unwrap_or("").trim().to_string();
     if branch_name.is_empty() {
         return Ok(());
     }
 
     let pending = state
         .chat_states
-        .get(&chat_id.0)
+        .get(chat_id)
         .and_then(|cs| cs.pending_solve.clone());
 
     let (issue_key, git) = match pending {
@@ -938,58 +955,65 @@ pub async fn handle_solve_branch_name_input(
                 &format!("solve: branch creation failed: {e}"),
                 Some(&json!({ "key": &issue_key, "branch": &branch_name })),
             );
-            bot.send_message(chat_id, format!("Failed to create branch: {e}"))
+            sender
+                .send(chat_id, &format!("Failed to create branch: {e}"))
                 .await?;
             return Ok(());
         }
     }
 
-    bot.send_message(
-        chat_id,
-        format!("Created branch <b>{}</b>.", escape_html(&branch_name)),
-    )
-    .parse_mode(ParseMode::Html)
-    .await?;
+    sender
+        .send(
+            chat_id,
+            &format!(
+                "Created branch <b>{}</b>.",
+                sender.escape(&branch_name)
+            ),
+        )
+        .await?;
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         cs.pending_solve = None;
     }
 
-    show_solve_action_picker(bot, chat_id, state, &issue_key, cwd, git).await
+    show_solve_action_picker(Arc::clone(&sender), chat_id, state, &issue_key, cwd, git).await
 }
 
 pub async fn handle_post_analysis_implement(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     issue_key: &str,
 ) -> Result<()> {
     let pending = state
         .chat_states
-        .get(&chat_id.0)
+        .get(chat_id)
         .and_then(|cs| cs.pending_post_analysis.clone());
 
     let Some(p) = pending else {
-        bot.send_message(chat_id, "No pending analysis. Run /solve again.")
+        sender
+            .send(chat_id, "No pending analysis. Run /solve again.")
             .await?;
         return Ok(());
     };
 
     if p.issue_key != issue_key {
-        bot.send_message(chat_id, "No pending analysis. Run /solve again.")
+        sender
+            .send(chat_id, "No pending analysis. Run /solve again.")
             .await?;
         return Ok(());
     }
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         cs.pending_post_analysis = None;
     }
 
     let session = if let Some(mg) = p.git {
         state.worktree_session(user_id, mg).await
     } else {
-        AskSession::new(user_id, None, None)
+        let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
+        AskSession::new(uid_i64, None, None)
     };
     let session = match p.qa_context {
         Some(ctx) => session.with_context(ctx),
@@ -997,30 +1021,31 @@ pub async fn handle_post_analysis_implement(
     };
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.ask_session = Some(session);
     }
 
-    bot.send_message(
-        chat_id,
-        "Implementation session started. Send a message to begin.",
-    )
-    .await?;
+    sender
+        .send(
+            chat_id,
+            "Implementation session started. Send a message to begin.",
+        )
+        .await?;
 
     Ok(())
 }
 
 pub async fn handle_solve(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     args: String,
 ) -> Result<()> {
     let issue_key = args.trim().to_string();
     if issue_key.is_empty() {
-        bot.send_message(chat_id, "Send the issue key:\n<code>MYAPP-123</code>")
-            .parse_mode(ParseMode::Html)
+        sender
+            .send(chat_id, "Send the issue key:\n<code>MYAPP-123</code>")
             .await?;
         return Ok(());
     }
@@ -1035,32 +1060,40 @@ pub async fn handle_solve(
     );
 
     if has_repos {
-        handle_repo_picker(bot, chat_id, state, user_id, &issue_key).await
+        handle_repo_picker(
+            Arc::clone(&sender),
+            chat_id,
+            user_id,
+            state,
+            &issue_key,
+        )
+        .await
     } else {
-        show_solve_action_picker(bot, chat_id, state, &issue_key, None, None).await
+        show_solve_action_picker(
+            Arc::clone(&sender),
+            chat_id,
+            state,
+            &issue_key,
+            None,
+            None,
+        )
+        .await
     }
 }
 
 pub async fn handle_solve_repo_callback(
-    bot: Bot,
-    q: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
+    action_data: &str,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(q.id.clone()).await;
-    let user_id = q.from.id.0 as i64;
-
-    let data = q.data.as_deref().unwrap_or("");
-    let parts: Vec<&str> = data.splitn(4, ':').collect();
+    let parts: Vec<&str> = action_data.splitn(4, ':').collect();
     if parts.len() < 4 {
         return Ok(());
     }
     let issue_key = parts[2];
     let repo_idx: usize = parts[3].parse().unwrap_or(0);
-
-    let chat_id = match q.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
 
     let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
 
@@ -1073,7 +1106,7 @@ pub async fn handle_solve_repo_callback(
     );
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_solve = Some(PendingSolve {
             issue_key: issue_key.to_string(),
             git,
@@ -1081,5 +1114,5 @@ pub async fn handle_solve_repo_callback(
         });
     }
 
-    handle_branch_picker(bot, chat_id, state, user_id).await
+    handle_branch_picker(Arc::clone(&sender), chat_id, state, user_id).await
 }

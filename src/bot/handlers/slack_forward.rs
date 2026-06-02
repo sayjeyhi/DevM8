@@ -2,44 +2,43 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::PendingSlackAction;
-use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
 use crate::slack::types::SlackNewMessage;
 
 pub async fn create_slack_forward_handler(
-    bot: Bot,
-    allowed_user_ids: Vec<i64>,
+    sender: Arc<dyn ChannelSender>,
+    allowed_chat_ids: Vec<String>,
     message: &SlackNewMessage,
 ) -> Result<()> {
-    let sender = &message.sender_name;
+    let snd = &message.sender_name;
     let text = &message.message.text;
     let channel_id = &message.channel.id;
     let ts = &message.message.ts;
 
     let body = format!(
-        "📨 <b>Slack DM from @{}</b>\n{}",
-        escape_html(sender),
-        escape_html(text)
+        "\u{1f4e8} <b>Slack DM from @{}</b>\n{}",
+        sender.escape(snd),
+        sender.escape(text)
     );
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("↩️ Reply", format!("slack:reply:{}:{}", channel_id, ts)),
-        InlineKeyboardButton::callback(
-            "🤖 Answer with AI",
+    let keyboard = vec![vec![
+        Button::new(
+            "\u{21a9}\u{fe0f} Reply",
+            format!("slack:reply:{}:{}", channel_id, ts),
+        ),
+        Button::new(
+            "\u{1f916} Answer with AI",
             format!("slack:ai:{}:{}", channel_id, ts),
         ),
-    ]]);
+    ]];
 
-    for user_id in &allowed_user_ids {
-        let _ = bot
-            .send_message(ChatId(*user_id), &body)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard.clone())
+    for chat_id in &allowed_chat_ids {
+        let _ = sender
+            .send_with_keyboard(chat_id, &body, keyboard.clone())
             .await;
     }
 
@@ -47,11 +46,11 @@ pub async fn create_slack_forward_handler(
 }
 
 pub async fn handle_pending_slack_reply(
-    bot: Bot,
-    msg: Message,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    text: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let text = msg.text().unwrap_or("").trim().to_string();
     if text.is_empty() {
         return Ok(());
     }
@@ -59,7 +58,7 @@ pub async fn handle_pending_slack_reply(
     let pending = {
         state
             .chat_states
-            .get(&msg.chat.id.0)
+            .get(chat_id)
             .and_then(|cs| cs.pending_slack_reply.clone())
     };
 
@@ -69,7 +68,7 @@ pub async fn handle_pending_slack_reply(
     };
 
     {
-        let mut entry = state.chat_states.entry(msg.chat.id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_slack_reply = None;
     }
 
@@ -80,7 +79,7 @@ pub async fn handle_pending_slack_reply(
 
     if let Some(slack) = state.slack.as_ref() {
         match slack
-            .post_message(&pending.channel_id, &text, pending.thread_ts.as_deref())
+            .post_message(&pending.channel_id, text, pending.thread_ts.as_deref())
             .await
         {
             Ok(()) => {
@@ -88,35 +87,34 @@ pub async fn handle_pending_slack_reply(
                     "slack: reply sent",
                     Some(&json!({ "channel": &pending.channel_id })),
                 );
-                bot.send_message(msg.chat.id, "Slack reply sent.").await?;
+                sender.send(chat_id, "Slack reply sent.").await?;
             }
             Err(e) => {
                 state.logger.error(
                     &format!("slack: failed to send reply: {e}"),
                     Some(&json!({ "channel": &pending.channel_id })),
                 );
-                bot.send_message(msg.chat.id, format!("Failed to send Slack reply: {e}"))
+                sender
+                    .send(chat_id, &format!("Failed to send Slack reply: {e}"))
                     .await?;
             }
         }
     } else {
-        bot.send_message(msg.chat.id, "Slack integration is not configured.")
+        sender
+            .send(chat_id, "Slack integration is not configured.")
             .await?;
     }
 
     Ok(())
 }
 
-pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppState>) -> Result<()> {
-    let _ = bot.answer_callback_query(q.id.clone()).await;
-
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let parts: Vec<&str> = data.splitn(4, ':').collect();
+pub async fn handle_slack_callback(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    action_data: &str,
+    state: Arc<AppState>,
+) -> Result<()> {
+    let parts: Vec<&str> = action_data.splitn(4, ':').collect();
     if parts.len() < 2 || parts[0] != "slack" {
         return Ok(());
     }
@@ -137,7 +135,7 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
             );
 
             {
-                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 entry.pending_slack_reply = Some(PendingSlackAction {
                     channel_id,
                     thread_ts: Some(ts),
@@ -145,7 +143,7 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                 });
             }
 
-            bot.send_message(chat_id, "Type your reply:").await?;
+            sender.send(chat_id, "Type your reply:").await?;
         }
 
         "ai" => {
@@ -173,39 +171,46 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                         slack_msg.text
                     );
 
-                    let thinking = bot.send_message(chat_id, "Generating AI draft...").await?;
+                    let thinking_ref = sender
+                        .send(chat_id, "Generating AI draft...")
+                        .await?;
 
                     match state.claude.ask(&prompt, AskOptions::default()).await {
                         Ok((draft, _)) => {
                             state.logger.info(
                                 "slack: AI draft generated",
-                                Some(&json!({ "channel": &channel_id, "draft_len": draft.len() })),
+                                Some(
+                                    &json!({ "channel": &channel_id, "draft_len": draft.len() }),
+                                ),
                             );
-                            bot.edit_message_text(
-                                chat_id,
-                                thinking.id,
-                                format!("AI draft:\n\n<pre>{}</pre>", escape_html(&draft)),
-                            )
-                            .parse_mode(ParseMode::Html)
-                            .await?;
+                            sender
+                                .edit_text(
+                                    &thinking_ref,
+                                    &format!(
+                                        "AI draft:\n\n<pre>{}</pre>",
+                                        sender.escape(&draft)
+                                    ),
+                                )
+                                .await?;
 
-                            let keyboard = InlineKeyboardMarkup::new(vec![vec![
-                                InlineKeyboardButton::callback(
-                                    "📤 Send",
+                            let keyboard = vec![vec![
+                                Button::new(
+                                    "\u{1f4e4} Send",
                                     format!("slack:send:{}:{}", channel_id, ts),
                                 ),
-                                InlineKeyboardButton::callback(
-                                    "✏️ Edit",
+                                Button::new(
+                                    "\u{270f}\u{fe0f} Edit",
                                     format!("slack:edit:{}:{}", channel_id, ts),
                                 ),
-                                InlineKeyboardButton::callback(
-                                    "❌ Cancel",
+                                Button::new(
+                                    "\u{274c} Cancel",
                                     format!("slack:cancel:{}:{}", channel_id, ts),
                                 ),
-                            ]]);
+                            ]];
 
                             {
-                                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                                let mut entry =
+                                    state.chat_states.entry(chat_id.to_string()).or_default();
                                 entry.pending_slack_reply = Some(PendingSlackAction {
                                     channel_id,
                                     thread_ts: Some(ts),
@@ -213,28 +218,33 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                                 });
                             }
 
-                            bot.send_message(chat_id, "Choose an action:")
-                                .reply_markup(keyboard)
+                            sender
+                                .send_with_keyboard(chat_id, "Choose an action:", keyboard)
                                 .await?;
                         }
                         Err(e) => {
                             state
                                 .logger
                                 .error(&format!("slack: Claude error generating draft: {e}"), None);
-                            bot.edit_message_text(
-                                chat_id,
-                                thinking.id,
-                                format!("Claude error: {e}"),
-                            )
-                            .await?;
+                            sender
+                                .edit_text(
+                                    &thinking_ref,
+                                    &format!("Claude error: {e}"),
+                                )
+                                .await?;
                         }
                     }
                 } else {
-                    bot.send_message(chat_id, "Could not retrieve the original Slack message.")
+                    sender
+                        .send(
+                            chat_id,
+                            "Could not retrieve the original Slack message.",
+                        )
                         .await?;
                 }
             } else {
-                bot.send_message(chat_id, "Slack integration is not configured.")
+                sender
+                    .send(chat_id, "Slack integration is not configured.")
                     .await?;
             }
         }
@@ -243,7 +253,7 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
             let pending = {
                 state
                     .chat_states
-                    .get(&chat_id.0)
+                    .get(chat_id)
                     .and_then(|cs| cs.pending_slack_reply.clone())
             };
 
@@ -263,23 +273,24 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                                     "slack: AI draft sent",
                                     Some(&json!({ "channel": &p.channel_id })),
                                 );
-                                bot.send_message(chat_id, "Slack message sent.").await?;
+                                sender.send(chat_id, "Slack message sent.").await?;
                             }
                             Err(e) => {
                                 state.logger.error(
                                     &format!("slack: failed to send AI draft: {e}"),
                                     Some(&json!({ "channel": &p.channel_id })),
                                 );
-                                bot.send_message(chat_id, format!("Failed: {e}")).await?;
+                                sender.send(chat_id, &format!("Failed: {e}")).await?;
                             }
                         }
                     }
                     {
-                        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                        let mut entry =
+                            state.chat_states.entry(chat_id.to_string()).or_default();
                         entry.pending_slack_reply = None;
                     }
                 } else {
-                    bot.send_message(chat_id, "No draft available.").await?;
+                    sender.send(chat_id, "No draft available.").await?;
                 }
             }
         }
@@ -292,7 +303,7 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
             let ts = parts[3].to_string();
 
             {
-                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 if let Some(ref mut p) = entry.pending_slack_reply {
                     p.ai_draft = None;
                 } else {
@@ -304,16 +315,16 @@ pub async fn handle_slack_callback(bot: Bot, q: CallbackQuery, state: Arc<AppSta
                 }
             }
 
-            bot.send_message(chat_id, "Type your reply:").await?;
+            sender.send(chat_id, "Type your reply:").await?;
         }
 
         "cancel" => {
             state.logger.info("slack: reply cancelled", None);
             {
-                let mut entry = state.chat_states.entry(chat_id.0).or_default();
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 entry.pending_slack_reply = None;
             }
-            bot.send_message(chat_id, "Cancelled.").await?;
+            sender.send(chat_id, "Cancelled.").await?;
         }
 
         _ => {}

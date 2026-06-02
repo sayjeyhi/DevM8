@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, ParseMode};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::channel::ChannelSender;
 use crate::shared::PATHS;
 
 const DEFAULT_LINES: usize = 50;
@@ -34,10 +32,8 @@ fn format_log_line(raw: &str) -> String {
             .and_then(serde_json::Value::as_str)
             .unwrap_or(raw);
 
-        // Extract time portion HH:MM:SS from ISO timestamp
         let time = if ts.len() >= 19 { &ts[11..19] } else { ts };
 
-        // Collect remaining fields as meta
         let meta: Vec<String> = val
             .as_object()
             .map(|obj| {
@@ -86,7 +82,7 @@ fn format_audit_line(raw: &str) -> String {
             format!("{} {} [{}|{}] {}", date, time, username, user_id, action)
         } else {
             format!(
-                "{} {} [{}|{}] {} — {}",
+                "{} {} [{}|{}] {} \u{2014} {}",
                 date, time, username, user_id, action, detail
             )
         }
@@ -100,8 +96,8 @@ fn format_audit_line(raw: &str) -> String {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_logs(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     _state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
@@ -116,7 +112,8 @@ pub async fn handle_logs(
     let file = match File::open(log_path).await {
         Ok(f) => f,
         Err(_) => {
-            bot.send_message(chat_id, "Log file not found or not accessible.")
+            sender
+                .send(chat_id, "Log file not found or not accessible.")
                 .await?;
             return Ok(());
         }
@@ -141,7 +138,7 @@ pub async fn handle_logs(
         .collect();
 
     if tail.is_empty() {
-        bot.send_message(chat_id, "Log file is empty.").await?;
+        sender.send(chat_id, "Log file is empty.").await?;
         return Ok(());
     }
 
@@ -160,8 +157,11 @@ pub async fn handle_logs(
         let chunk = &remaining[..split_at];
         remaining = remaining[split_at..].trim_start_matches('\n');
 
-        bot.send_message(chat_id, format!("<pre>{}</pre>", escape_html(chunk)))
-            .parse_mode(ParseMode::Html)
+        sender
+            .send(
+                chat_id,
+                &format!("<pre>{}</pre>", sender.escape(chunk)),
+            )
             .await?;
     }
 
@@ -169,8 +169,8 @@ pub async fn handle_logs(
 }
 
 pub async fn handle_audit_logs(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     _state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
@@ -185,7 +185,8 @@ pub async fn handle_audit_logs(
     let file = match File::open(log_path).await {
         Ok(f) => f,
         Err(_) => {
-            bot.send_message(chat_id, "Audit log file not found or not accessible.")
+            sender
+                .send(chat_id, "Audit log file not found or not accessible.")
                 .await?;
             return Ok(());
         }
@@ -210,11 +211,11 @@ pub async fn handle_audit_logs(
         .collect();
 
     if tail.is_empty() {
-        bot.send_message(chat_id, "Audit log is empty.").await?;
+        sender.send(chat_id, "Audit log is empty.").await?;
         return Ok(());
     }
 
-    let header = format!("🔍 Last {} audit entries:\n\n", tail.len());
+    let header = format!("\u{1f50d} Last {} audit entries:\n\n", tail.len());
     let full_text = header + &tail.join("\n");
     let mut remaining = full_text.as_str();
 
@@ -227,8 +228,11 @@ pub async fn handle_audit_logs(
         };
         let chunk = &remaining[..split_at];
         remaining = remaining[split_at..].trim_start_matches('\n');
-        bot.send_message(chat_id, format!("<pre>{}</pre>", escape_html(chunk)))
-            .parse_mode(ParseMode::Html)
+        sender
+            .send(
+                chat_id,
+                &format!("<pre>{}</pre>", sender.escape(chunk)),
+            )
             .await?;
     }
 

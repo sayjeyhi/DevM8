@@ -1,4 +1,5 @@
 mod bot;
+mod channel;
 mod claude;
 mod commands;
 mod config;

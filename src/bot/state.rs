@@ -197,11 +197,11 @@ pub enum JiraPendingAction {
 #[derive(Debug, Clone)]
 pub struct PendingPermissions {
     /// The user whose access is currently being edited; None when showing the user list.
-    pub target_user_id: Option<i64>,
+    pub target_user_id: Option<String>,
     /// Project keys currently toggled on.
     pub selected: HashSet<String>,
     /// ID of the single reused message (for in-place keyboard edits).
-    pub message_id: Option<i32>,
+    pub message_id: Option<String>,
     /// True when the admin clicked "Add new user" and we're waiting for a typed user ID.
     pub awaiting_user_id_input: bool,
 }

@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, ParseMode};
 use tokio::process::Command;
 
-use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::channel::ChannelSender;
 use crate::commands::add_project_cmd::register_project;
 
 fn repo_name_from_url(url: &str) -> String {
@@ -18,8 +16,8 @@ fn repo_name_from_url(url: &str) -> String {
 }
 
 pub async fn handle_clone(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     _state: Arc<AppState>,
     args: String,
 ) -> Result<()> {
@@ -27,13 +25,13 @@ pub async fn handle_clone(
     let ssh_url = match tokens.next().filter(|s| !s.is_empty()) {
         Some(u) => u.to_string(),
         None => {
-            bot.send_message(
-                chat_id,
-                "Send the SSH URL and destination path:\n\
-                 <code>git@github.com:org/repo.git /home/user/projects</code>",
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Send the SSH URL and destination path:\n\
+                     <code>git@github.com:org/repo.git /home/user/projects</code>",
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -41,13 +39,13 @@ pub async fn handle_clone(
     let dest_parent = match tokens.next().map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => p.to_string(),
         None => {
-            bot.send_message(
-                chat_id,
-                "Send the SSH URL and destination path:\n\
-                 <code>git@github.com:org/repo.git /home/user/projects</code>",
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Send the SSH URL and destination path:\n\
+                     <code>git@github.com:org/repo.git /home/user/projects</code>",
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -58,16 +56,15 @@ pub async fn handle_clone(
         .to_string_lossy()
         .into_owned();
 
-    let progress = bot
-        .send_message(
+    let progress_ref = sender
+        .send(
             chat_id,
-            format!(
-                "Cloning <code>{}</code> → <code>{}</code>…",
-                escape_html(&ssh_url),
-                escape_html(&dest_path)
+            &format!(
+                "Cloning <code>{}</code> \u{2192} <code>{}</code>\u{2026}",
+                sender.escape(&ssh_url),
+                sender.escape(&dest_path)
             ),
         )
-        .parse_mode(ParseMode::Html)
         .await?;
 
     let output = Command::new("git")
@@ -76,28 +73,25 @@ pub async fn handle_clone(
         .await;
 
     let reply = match output {
-        Err(e) => format!("Failed to run git: {}", escape_html(&e.to_string())),
+        Err(e) => format!("Failed to run git: {}", sender.escape(&e.to_string())),
         Ok(o) if !o.status.success() => {
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            format!("git clone failed:\n<pre>{}</pre>", escape_html(&stderr))
+            format!("git clone failed:\n<pre>{}</pre>", sender.escape(&stderr))
         }
         Ok(_) => match register_project(&dest_path, &repo_name) {
             Ok(()) => format!(
                 "Cloned and registered as project <code>{}</code>\nPath: <code>{}</code>",
-                escape_html(&repo_name),
-                escape_html(&dest_path)
+                sender.escape(&repo_name),
+                sender.escape(&dest_path)
             ),
             Err(e) => format!(
                 "Cloned to <code>{}</code> but failed to register: {}",
-                escape_html(&dest_path),
-                escape_html(&e.to_string())
+                sender.escape(&dest_path),
+                sender.escape(&e.to_string())
             ),
         },
     };
 
-    bot.edit_message_text(chat_id, progress.id, reply)
-        .parse_mode(ParseMode::Html)
-        .await?;
-
+    sender.edit_text(&progress_ref, &reply).await?;
     Ok(())
 }
