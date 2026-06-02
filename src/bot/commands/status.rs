@@ -2,17 +2,20 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use sysinfo::{Disks, System};
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, ParseMode};
 
-use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::bot::utils::escape_html;
+use crate::channel::ChannelSender;
 use crate::daemon::agent_status;
 use crate::daemon::pid::{is_process_running, read_pid};
 use crate::shared::paths::PATHS;
 use crate::shared::utils::{compute_uptime_from_pid_file, dir_size_bytes, format_bytes};
 
-pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> Result<()> {
+pub async fn handle_status(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+) -> Result<()> {
     let launchd = agent_status().await;
     let pid_from_file = read_pid(None).await.ok().flatten();
 
@@ -38,7 +41,6 @@ pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> R
         "-".to_string()
     };
 
-    // Jira / git config
     let jira_url = state
         .config
         .jira
@@ -59,15 +61,12 @@ pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> R
         escape_html(&git_keys.join(", "))
     };
 
-    // Users
     let configured_users = state.config.telegram.allowed_user_ids.len();
     let active_users = state.user_names.len();
 
-    // Log sizes
     let log_size = dir_size_bytes(&PATHS.logs_dir);
     let log_size_str = format_bytes(log_size);
 
-    // System info (CPU/RAM) — run blocking in a spawn_blocking to avoid blocking the async runtime
     let (os_name, total_ram, free_ram, free_disk, total_disk) = tokio::task::spawn_blocking(|| {
         let mut sys = System::new_all();
         sys.refresh_all();
@@ -123,9 +122,6 @@ pub async fn handle_status(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> R
          Git projects:   <code>{git_projects}</code>"
     );
 
-    bot.send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .await?;
-
+    sender.send(chat_id, &text).await?;
     Ok(())
 }

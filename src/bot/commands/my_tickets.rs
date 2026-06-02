@@ -2,12 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::{AskSession, PageCache};
-use crate::bot::utils::escape_html;
 use crate::bot::AppState;
+use crate::channel::{Button, ChannelSender};
 use crate::config::loader::load_config;
 use crate::jira::types::JiraIssue;
 
@@ -19,11 +17,11 @@ const PAGE_SIZE: u32 = 8;
 
 fn status_emoji(status: &str) -> &'static str {
     match status.to_lowercase().as_str() {
-        s if s.contains("done") || s.contains("closed") || s.contains("resolved") => "",
-        s if s.contains("progress") || s.contains("review") || s.contains("testing") => "",
-        s if s.contains("block") || s.contains("impede") => "",
-        s if s.contains("todo") || s.contains("backlog") || s.contains("open") => "",
-        _ => "",
+        s if s.contains("done") || s.contains("closed") || s.contains("resolved") => "\u{2705}",
+        s if s.contains("progress") || s.contains("review") || s.contains("testing") => "\u{1f504}",
+        s if s.contains("block") || s.contains("impede") => "\u{1f6d1}",
+        s if s.contains("todo") || s.contains("backlog") || s.contains("open") => "\u{1f4cb}",
+        _ => "\u{25aa}\u{fe0f}",
     }
 }
 
@@ -31,74 +29,77 @@ fn status_emoji(status: &str) -> &'static str {
 // Formatters
 // ---------------------------------------------------------------------------
 
-fn format_tickets_page(issues: &[JiraIssue], bot_username: &str) -> String {
+fn format_tickets_page(
+    sender: &Arc<dyn ChannelSender>,
+    issues: &[JiraIssue],
+    bot_username: Option<&str>,
+) -> String {
     if issues.is_empty() {
         return "No tickets found.".to_string();
     }
     issues
         .iter()
         .map(|i| {
-            let details_link = if bot_username.is_empty() {
-                String::new()
-            } else {
-                format!(
+            let details_link = match bot_username {
+                Some(uname) if !uname.is_empty() => format!(
                     "  <a href=\"https://t.me/{}?start={}\">[details]</a>",
-                    bot_username, i.key,
-                )
+                    uname, i.key,
+                ),
+                _ => String::new(),
             };
             format!(
-                "{} <a href=\"{}\">{}</a> — {}{}\n  <i>{}</i>",
+                "{} <a href=\"{}\">{}</a> \u{2014} {}{}\n  <i>{}</i>",
                 status_emoji(&i.status),
                 i.url,
-                escape_html(&i.key),
-                escape_html(&i.summary),
+                sender.escape(&i.key),
+                sender.escape(&i.summary),
                 details_link,
-                escape_html(&i.status),
+                sender.escape(&i.status),
             )
         })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn build_list_keyboard(page: usize, has_next: bool) -> InlineKeyboardMarkup {
-    let mut nav_row: Vec<InlineKeyboardButton> = Vec::new();
+fn build_list_keyboard(page: usize, has_next: bool) -> Vec<Vec<Button>> {
+    let mut nav_row: Vec<Button> = Vec::new();
     if page > 0 {
-        nav_row.push(InlineKeyboardButton::callback(
-            "◀️ Prev",
+        nav_row.push(Button::new(
+            "\u{25c0}\u{fe0f} Prev",
             format!("tickets:page:{}", page - 1),
         ));
     }
-    nav_row.push(InlineKeyboardButton::callback(
-        "🔄 Refresh",
+    nav_row.push(Button::new(
+        "\u{1f504} Refresh",
         format!("tickets:refresh:{}", page),
     ));
     if has_next {
-        nav_row.push(InlineKeyboardButton::callback(
-            "Next ▶️",
+        nav_row.push(Button::new(
+            "Next \u{25b6}\u{fe0f}",
             format!("tickets:page:{}", page + 1),
         ));
     }
-    InlineKeyboardMarkup::new(vec![nav_row])
+    vec![nav_row]
 }
 
-fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![
+fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> Vec<Vec<Button>> {
+    vec![
         vec![
-            InlineKeyboardButton::callback("🤖 Ask", format!("tickets:ask:{}", issue_key)),
-            InlineKeyboardButton::callback("🔧 Solve", format!("tickets:solve:{}", issue_key)),
+            Button::new("\u{1f916} Ask", format!("tickets:ask:{}", issue_key)),
+            Button::new("\u{1f527} Solve", format!("tickets:solve:{}", issue_key)),
         ],
         vec![
-            InlineKeyboardButton::callback("🔄 Move", format!("tickets:move_start:{}", issue_key)),
-            InlineKeyboardButton::callback(
-                "💬 Comment",
+            Button::new("\u{1f504} Move", format!("tickets:move_start:{}", issue_key)),
+            Button::new(
+                "\u{1f4ac} Comment",
                 format!("tickets:comment_start:{}", issue_key),
             ),
         ],
-        vec![InlineKeyboardButton::callback(
-            "◀️ Back to list",
+        vec![Button::new(
+            "\u{25c0}\u{fe0f} Back to list",
             format!("tickets:page:{}", back_page),
         )],
-    ])
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
     let access = state.project_access.read().unwrap();
     let is_restricted = !is_admin && access.values().any(|ids| ids.contains(&user_id));
 
-    let jira = match state.jira_for_user(user_id) {
+    let jira = match state.jira_for_user(&user_id.to_string()) {
         Some(j) => j,
         None => return vec![],
     };
@@ -136,38 +137,34 @@ pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 pub async fn handle_my_tickets(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
 ) -> Result<()> {
-    let project_keys = accessible_project_keys(user_id, &state);
+    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
+    let project_keys = accessible_project_keys(uid_i64, &state);
 
     if project_keys.is_empty() {
-        bot.send_message(chat_id, "No project keys configured.")
+        sender
+            .send(chat_id, "No project keys configured.")
             .await?;
         return Ok(());
     }
 
     if project_keys.len() == 1 {
         let key = project_keys[0].clone();
-        return handle_my_tickets_project(bot, chat_id, state, user_id, &key).await;
+        return handle_my_tickets_project(Arc::clone(&sender), chat_id, user_id, state, &key).await;
     }
 
     // Multiple project keys — show picker
-    let buttons: Vec<Vec<InlineKeyboardButton>> = project_keys
+    let buttons: Vec<Vec<Button>> = project_keys
         .iter()
-        .map(|k| {
-            vec![InlineKeyboardButton::callback(
-                k.clone(),
-                format!("tickets:project:{}", k),
-            )]
-        })
+        .map(|k| vec![Button::new(k.clone(), format!("tickets:project:{}", k))])
         .collect();
 
-    let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(chat_id, "Select a project:")
-        .reply_markup(keyboard)
+    sender
+        .send_with_keyboard(chat_id, "Select a project:", buttons)
         .await?;
 
     Ok(())
@@ -178,10 +175,10 @@ pub async fn handle_my_tickets(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_my_tickets_project(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     project_key: &str,
 ) -> Result<()> {
     state.logger.info(
@@ -190,7 +187,7 @@ pub async fn handle_my_tickets_project(
     );
     let favorite_statuses: Vec<String> = load_config(None)
         .ok()
-        .and_then(|c| c.user_jira.get(&user_id.to_string()).cloned())
+        .and_then(|c| c.user_jira.get(user_id).cloned())
         .map(|c| c.favorite_statuses)
         .unwrap_or_default();
 
@@ -198,11 +195,12 @@ pub async fn handle_my_tickets_project(
         favorite_statuses
     } else {
         let Some(jira) = state.jira_for_user(user_id) else {
-            bot.send_message(
-                chat_id,
-                "Please set up your Jira account first. Use /jira → My Jira.",
-            )
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+                )
+                .await?;
             return Ok(());
         };
         match jira.get_statuses().await {
@@ -212,27 +210,27 @@ pub async fn handle_my_tickets_project(
                     &format!("tickets: failed to fetch statuses: {e}"),
                     Some(&json!({ "project": project_key })),
                 );
-                bot.send_message(chat_id, format!("Error fetching statuses: {e}"))
+                sender
+                    .send(chat_id, &format!("Error fetching statuses: {e}"))
                     .await?;
                 return Ok(());
             }
         }
     };
 
-    let mut buttons: Vec<Vec<InlineKeyboardButton>> = vec![vec![InlineKeyboardButton::callback(
-        "📋 All statuses",
+    let mut buttons: Vec<Vec<Button>> = vec![vec![Button::new(
+        "\u{1f4cb} All statuses",
         format!("tickets:status:{}:ALL", project_key),
     )]];
     for name in &status_names {
-        buttons.push(vec![InlineKeyboardButton::callback(
+        buttons.push(vec![Button::new(
             format!("{} {}", status_emoji(name), name),
             format!("tickets:status:{}:{}", project_key, name),
         )]);
     }
 
-    let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(chat_id, "Filter by status:")
-        .reply_markup(keyboard)
+    sender
+        .send_with_keyboard(chat_id, "Filter by status:", buttons)
         .await?;
 
     Ok(())
@@ -243,10 +241,10 @@ pub async fn handle_my_tickets_project(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_my_tickets_status(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     project_key: &str,
     status_filter: &str,
 ) -> Result<()> {
@@ -262,11 +260,12 @@ pub async fn handle_my_tickets_status(
         Some(&json!({ "project": project_key, "status": status_filter })),
     );
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let result = match jira
@@ -279,7 +278,7 @@ pub async fn handle_my_tickets_status(
                 &format!("tickets: query failed: {e}"),
                 Some(&json!({ "project": project_key })),
             );
-            bot.send_message(chat_id, format!("Error: {e}")).await?;
+            sender.send(chat_id, &format!("Error: {e}")).await?;
             return Ok(());
         }
     };
@@ -296,18 +295,15 @@ pub async fn handle_my_tickets_status(
     cache.current_page = 0;
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.page_cache = Some(cache);
     }
 
     let has_next = result.next_page_token.is_some();
-    let text = format_tickets_page(&result.issues, &bot_username);
+    let text = format_tickets_page(&sender, &result.issues, Some(&bot_username));
     let keyboard = build_list_keyboard(0, has_next);
 
-    bot.send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(keyboard)
-        .await?;
+    sender.send_with_keyboard(chat_id, &text, keyboard).await?;
 
     Ok(())
 }
@@ -317,14 +313,14 @@ pub async fn handle_my_tickets_status(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_my_tickets_page(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     target_page: usize,
 ) -> Result<()> {
     let (project_key, status_filter, tokens, current_page) = {
-        let cs = state.chat_states.get(&chat_id.0);
+        let cs = state.chat_states.get(chat_id);
         match cs.as_ref().and_then(|c| c.page_cache.as_ref()) {
             Some(cache) => (
                 cache.project_key.clone(),
@@ -333,7 +329,8 @@ pub async fn handle_my_tickets_page(
                 cache.current_page,
             ),
             None => {
-                bot.send_message(chat_id, "No page context found. Use /my_tickets.")
+                sender
+                    .send(chat_id, "No page context found. Use /my_tickets.")
                     .await?;
                 return Ok(());
             }
@@ -341,18 +338,19 @@ pub async fn handle_my_tickets_page(
     };
 
     if target_page >= tokens.len() && target_page > current_page {
-        bot.send_message(chat_id, "No more pages.").await?;
+        sender.send(chat_id, "No more pages.").await?;
         return Ok(());
     }
 
     let page_token = tokens.get(target_page).and_then(|t| t.as_deref());
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let result = match jira
@@ -366,14 +364,14 @@ pub async fn handle_my_tickets_page(
     {
         Ok(r) => r,
         Err(e) => {
-            bot.send_message(chat_id, format!("Error: {e}")).await?;
+            sender.send(chat_id, &format!("Error: {e}")).await?;
             return Ok(());
         }
     };
 
     // Update cache
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         if let Some(cache) = entry.page_cache.as_mut() {
             cache.current_page = target_page;
             if let Some(next_token) = result.next_page_token.clone() {
@@ -386,13 +384,10 @@ pub async fn handle_my_tickets_page(
     }
 
     let has_next = result.next_page_token.is_some();
-    let text = format_tickets_page(&result.issues, &state.bot_username);
+    let text = format_tickets_page(&sender, &result.issues, Some(&state.bot_username));
     let keyboard = build_list_keyboard(target_page, has_next);
 
-    bot.send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(keyboard)
-        .await?;
+    sender.send_with_keyboard(chat_id, &text, keyboard).await?;
 
     Ok(())
 }
@@ -402,15 +397,15 @@ pub async fn handle_my_tickets_page(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_ticket_details(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let back_page = state
         .chat_states
-        .get(&chat_id.0)
+        .get(chat_id)
         .and_then(|cs| cs.page_cache.as_ref().map(|c| c.current_page))
         .unwrap_or(0);
 
@@ -419,11 +414,12 @@ pub async fn handle_ticket_details(
         Some(&json!({ "key": issue_key })),
     );
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let issue = match jira.get_issue_by_key(issue_key).await {
@@ -433,7 +429,7 @@ pub async fn handle_ticket_details(
                 &format!("tickets: failed to fetch issue: {e}"),
                 Some(&json!({ "key": issue_key })),
             );
-            bot.send_message(chat_id, format!("Error: {e}")).await?;
+            sender.send(chat_id, &format!("Error: {e}")).await?;
             return Ok(());
         }
     };
@@ -441,12 +437,12 @@ pub async fn handle_ticket_details(
     let desc_preview: String = issue.description.chars().take(400).collect();
 
     let text = format!(
-        "<b><a href=\"{}\">{}</a></b> — {}\nStatus: {}\n\n{}{}",
+        "<b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\n{}{}",
         issue.url,
-        escape_html(&issue.key),
-        escape_html(&issue.summary),
-        escape_html(&issue.status),
-        escape_html(&desc_preview),
+        sender.escape(&issue.key),
+        sender.escape(&issue.summary),
+        sender.escape(&issue.status),
+        sender.escape(&desc_preview),
         if issue.description.len() > 400 {
             "..."
         } else {
@@ -456,10 +452,7 @@ pub async fn handle_ticket_details(
 
     let keyboard = build_details_action_keyboard(issue_key, back_page);
 
-    bot.send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(keyboard)
-        .await?;
+    sender.send_with_keyboard(chat_id, &text, keyboard).await?;
 
     Ok(())
 }
@@ -469,53 +462,56 @@ pub async fn handle_ticket_details(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_move_start(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let transitions = match jira.get_transitions(issue_key).await {
         Ok(t) => t,
         Err(e) => {
-            bot.send_message(chat_id, format!("Error fetching transitions: {e}"))
+            sender
+                .send(chat_id, &format!("Error fetching transitions: {e}"))
                 .await?;
             return Ok(());
         }
     };
 
     if transitions.is_empty() {
-        bot.send_message(chat_id, "No available transitions.")
-            .await?;
+        sender.send(chat_id, "No available transitions.").await?;
         return Ok(());
     }
 
-    let buttons: Vec<Vec<InlineKeyboardButton>> = transitions
+    let buttons: Vec<Vec<Button>> = transitions
         .iter()
         .map(|(_, name)| {
-            vec![InlineKeyboardButton::callback(
+            vec![Button::new(
                 name.clone(),
                 format!("tickets:move_exec:{}:{}", issue_key, name),
             )]
         })
         .collect();
 
-    let keyboard = InlineKeyboardMarkup::new(buttons);
-    bot.send_message(
-        chat_id,
-        format!("Select new status for <b>{}</b>:", escape_html(issue_key)),
-    )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(keyboard)
-    .await?;
+    sender
+        .send_with_keyboard(
+            chat_id,
+            &format!(
+                "Select new status for <b>{}</b>:",
+                sender.escape(issue_key)
+            ),
+            buttons,
+        )
+        .await?;
 
     Ok(())
 }
@@ -525,10 +521,10 @@ pub async fn handle_move_start(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_move_execute(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     issue_key: &str,
     status: &str,
 ) -> Result<()> {
@@ -537,11 +533,12 @@ pub async fn handle_move_execute(
         Some(&json!({ "key": issue_key, "target_status": status })),
     );
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     match jira.transition_issue(issue_key, status).await {
@@ -550,23 +547,23 @@ pub async fn handle_move_execute(
                 "tickets: transition complete",
                 Some(&json!({ "key": issue_key, "status": status })),
             );
-            bot.send_message(
-                chat_id,
-                format!(
-                    "Moved <b>{}</b> \u{2192} {}",
-                    escape_html(issue_key),
-                    escape_html(status)
-                ),
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    &format!(
+                        "Moved <b>{}</b> \u{2192} {}",
+                        sender.escape(issue_key),
+                        sender.escape(status)
+                    ),
+                )
+                .await?;
         }
         Err(e) => {
             state.logger.error(
                 &format!("tickets: transition failed: {e}"),
                 Some(&json!({ "key": issue_key, "target_status": status })),
             );
-            bot.send_message(chat_id, format!("Error: {e}")).await?;
+            sender.send(chat_id, &format!("Error: {e}")).await?;
         }
     }
 
@@ -578,22 +575,22 @@ pub async fn handle_move_execute(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_comment_start(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     issue_key: &str,
 ) -> Result<()> {
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_comment = Some((issue_key.to_string(),));
     }
 
-    bot.send_message(
-        chat_id,
-        format!("Type a comment for <b>{}</b>:", escape_html(issue_key)),
-    )
-    .parse_mode(ParseMode::Html)
-    .await?;
+    sender
+        .send(
+            chat_id,
+            &format!("Type a comment for <b>{}</b>:", sender.escape(issue_key)),
+        )
+        .await?;
 
     Ok(())
 }
@@ -603,10 +600,10 @@ pub async fn handle_comment_start(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_ticket_ask(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
     issue_key: &str,
 ) -> Result<()> {
     state.logger.info(
@@ -615,11 +612,12 @@ pub async fn handle_ticket_ask(
     );
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let issue = match jira.get_issue_by_key(issue_key).await {
@@ -629,7 +627,8 @@ pub async fn handle_ticket_ask(
                 &format!("tickets: ask — failed to fetch issue: {e}"),
                 Some(&json!({ "key": issue_key })),
             );
-            bot.send_message(chat_id, format!("Error fetching ticket: {e}"))
+            sender
+                .send(chat_id, &format!("Error fetching ticket: {e}"))
                 .await?;
             return Ok(());
         }
@@ -652,21 +651,22 @@ pub async fn handle_ticket_ask(
     if repos.is_empty() {
         // No git context — start session directly
         {
-            let mut entry = state.chat_states.entry(chat_id.0).or_default();
-            entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+            entry.ask_session =
+                Some(AskSession::new(user_id, None, None).with_context(context));
         }
-        bot.send_message(
-            chat_id,
-            format!(
-                "📋 <b><a href=\"{}\">{}</a></b> — {}\nStatus: {}\n\nWhat would you like to ask?",
-                issue.url,
-                escape_html(&issue.key),
-                escape_html(&issue.summary),
-                escape_html(&issue.status),
-            ),
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
+        sender
+            .send(
+                chat_id,
+                &format!(
+                    "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\nWhat would you like to ask?",
+                    issue.url,
+                    sender.escape(&issue.key),
+                    sender.escape(&issue.summary),
+                    sender.escape(&issue.status),
+                ),
+            )
+            .await?;
         return Ok(());
     }
 
@@ -679,7 +679,7 @@ pub async fn handle_ticket_ask(
         let clean = git.is_clean().await.unwrap_or(true);
 
         {
-            let mut entry = state.chat_states.entry(chat_id.0).or_default();
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
             entry.ask_session = Some(
                 AskSession::new(user_id, Some(git.repo_path.clone()), Some(git.clone()))
                     .with_context(context),
@@ -692,30 +692,31 @@ pub async fn handle_ticket_ask(
             .and_then(|n| n.to_str())
             .unwrap_or("repo");
 
-        bot.send_message(
-            chat_id,
-            format!(
-                "📋 <b><a href=\"{}\">{}</a></b> — {}\nStatus: {}\n\n📂 <b>{}</b> | Branch: <code>{}</code>{}\n\nWhat would you like to ask?",
-                issue.url,
-                escape_html(&issue.key),
-                escape_html(&issue.summary),
-                escape_html(&issue.status),
-                escape_html(repo_name),
-                escape_html(&branch),
-                if clean { "" } else { " ⚠️ dirty" },
-            ),
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
+        sender
+            .send(
+                chat_id,
+                &format!(
+                    "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\n\u{1f4c2} <b>{}</b> | Branch: <code>{}</code>{}\n\nWhat would you like to ask?",
+                    issue.url,
+                    sender.escape(&issue.key),
+                    sender.escape(&issue.summary),
+                    sender.escape(&issue.status),
+                    sender.escape(repo_name),
+                    sender.escape(&branch),
+                    if clean { "" } else { " \u{26a0}\u{fe0f} dirty" },
+                ),
+            )
+            .await?;
         return Ok(());
     }
 
     // Multiple repos — show picker, preserving context in pending ask
     use crate::bot::state::PendingAsk;
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         // Store context temporarily; session will be created after repo selection
-        entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
+        entry.ask_session =
+            Some(AskSession::new(user_id, None, None).with_context(context));
         entry.pending_ask = Some(PendingAsk {
             repo_path: None,
             git: None,
@@ -724,7 +725,7 @@ pub async fn handle_ticket_ask(
         });
     }
 
-    let buttons: Vec<Vec<InlineKeyboardButton>> = repos
+    let buttons: Vec<Vec<Button>> = repos
         .iter()
         .enumerate()
         .map(|(i, git)| {
@@ -736,25 +737,22 @@ pub async fn handle_ticket_ask(
                     .and_then(|n| n.to_str())
                     .unwrap_or("repo")
             );
-            vec![InlineKeyboardButton::callback(
-                label,
-                format!("ask:repo:{}", i),
-            )]
+            vec![Button::new(label, format!("ask:repo:{}", i))]
         })
         .collect();
 
-    bot.send_message(
-        chat_id,
-        format!(
-            "📋 <b><a href=\"{}\">{}</a></b> — {}\n\nSelect a repository:",
-            issue.url,
-            escape_html(&issue.key),
-            escape_html(&issue.summary),
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(InlineKeyboardMarkup::new(buttons))
-    .await?;
+    sender
+        .send_with_keyboard(
+            chat_id,
+            &format!(
+                "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\n\nSelect a repository:",
+                issue.url,
+                sender.escape(&issue.key),
+                sender.escape(&issue.summary),
+            ),
+            buttons,
+        )
+        .await?;
 
     Ok(())
 }
@@ -764,90 +762,113 @@ pub async fn handle_ticket_ask(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_my_tickets_callback(
-    bot: Bot,
-    q: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    user_id: &str,
+    action_data: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(q.id.clone()).await;
-    let user_id = q.from.id.0 as i64;
-
-    let data = q.data.as_deref().unwrap_or("");
-    let chat_id = match q.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
     // tickets:project:<key>
-    if let Some(key) = data.strip_prefix("tickets:project:") {
-        return handle_my_tickets_project(bot, chat_id, state, user_id, key).await;
+    if let Some(key) = action_data.strip_prefix("tickets:project:") {
+        return handle_my_tickets_project(Arc::clone(&sender), chat_id, user_id, state, key).await;
     }
 
     // tickets:status:<project_key>:<status>
-    if let Some(rest) = data.strip_prefix("tickets:status:") {
+    if let Some(rest) = action_data.strip_prefix("tickets:status:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
         if parts.len() == 2 {
-            return handle_my_tickets_status(bot, chat_id, state, user_id, parts[0], parts[1])
-                .await;
+            return handle_my_tickets_status(
+                Arc::clone(&sender),
+                chat_id,
+                user_id,
+                state,
+                parts[0],
+                parts[1],
+            )
+            .await;
         }
         return Ok(());
     }
 
     // tickets:page:<page_index>
-    if let Some(page_str) = data.strip_prefix("tickets:page:") {
+    if let Some(page_str) = action_data.strip_prefix("tickets:page:") {
         let page: usize = page_str.parse().unwrap_or(0);
-        return handle_my_tickets_page(bot, chat_id, state, user_id, page).await;
+        return handle_my_tickets_page(Arc::clone(&sender), chat_id, user_id, state, page).await;
     }
 
     // tickets:refresh:<page_index> — re-fetch from Jira (clears token cache, goes to page 0)
-    if data.starts_with("tickets:refresh:") {
+    if action_data.starts_with("tickets:refresh:") {
         let (project_key, status_filter) = {
-            let cs = state.chat_states.get(&chat_id.0);
+            let cs = state.chat_states.get(chat_id);
             match cs.as_ref().and_then(|c| c.page_cache.as_ref()) {
                 Some(cache) => (cache.project_key.clone(), cache.status_filter.clone()),
                 None => {
-                    bot.send_message(chat_id, "No list context. Use /my_tickets.")
+                    sender
+                        .send(chat_id, "No list context. Use /my_tickets.")
                         .await?;
                     return Ok(());
                 }
             }
         };
         let filter = status_filter.as_deref().unwrap_or("ALL");
-        return handle_my_tickets_status(bot, chat_id, state, user_id, &project_key, filter).await;
+        return handle_my_tickets_status(
+            Arc::clone(&sender),
+            chat_id,
+            user_id,
+            state,
+            &project_key,
+            filter,
+        )
+        .await;
     }
 
     // tickets:details:<issue_key>
-    if let Some(key) = data.strip_prefix("tickets:details:") {
-        return handle_ticket_details(bot, chat_id, state, user_id, key).await;
+    if let Some(key) = action_data.strip_prefix("tickets:details:") {
+        return handle_ticket_details(Arc::clone(&sender), chat_id, user_id, state, key).await;
     }
 
     // tickets:ask:<issue_key>
-    if let Some(key) = data.strip_prefix("tickets:ask:") {
-        return handle_ticket_ask(bot, chat_id, state, user_id, key).await;
+    if let Some(key) = action_data.strip_prefix("tickets:ask:") {
+        return handle_ticket_ask(Arc::clone(&sender), chat_id, user_id, state, key).await;
     }
 
     // tickets:solve:<issue_key>
-    if let Some(key) = data.strip_prefix("tickets:solve:") {
-        return crate::bot::commands::solve::handle_repo_picker(bot, chat_id, state, user_id, key)
-            .await;
+    if let Some(key) = action_data.strip_prefix("tickets:solve:") {
+        return crate::bot::commands::solve::handle_repo_picker(
+            Arc::clone(&sender),
+            chat_id,
+            user_id,
+            state,
+            key,
+        )
+        .await;
     }
 
     // tickets:move_start:<issue_key>
-    if let Some(key) = data.strip_prefix("tickets:move_start:") {
-        return handle_move_start(bot, chat_id, state, user_id, key).await;
+    if let Some(key) = action_data.strip_prefix("tickets:move_start:") {
+        return handle_move_start(Arc::clone(&sender), chat_id, user_id, state, key).await;
     }
 
     // tickets:move_exec:<issue_key>:<status>
-    if let Some(rest) = data.strip_prefix("tickets:move_exec:") {
+    if let Some(rest) = action_data.strip_prefix("tickets:move_exec:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
         if parts.len() == 2 {
-            return handle_move_execute(bot, chat_id, state, user_id, parts[0], parts[1]).await;
+            return handle_move_execute(
+                Arc::clone(&sender),
+                chat_id,
+                user_id,
+                state,
+                parts[0],
+                parts[1],
+            )
+            .await;
         }
         return Ok(());
     }
 
     // tickets:comment_start:<issue_key>
-    if let Some(key) = data.strip_prefix("tickets:comment_start:") {
-        return handle_comment_start(bot, chat_id, state, key).await;
+    if let Some(key) = action_data.strip_prefix("tickets:comment_start:") {
+        return handle_comment_start(Arc::clone(&sender), chat_id, state, key).await;
     }
 
     Ok(())

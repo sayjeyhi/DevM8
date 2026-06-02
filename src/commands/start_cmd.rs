@@ -36,11 +36,29 @@ pub async fn start_command() -> Result<(), AppError> {
         config
     };
 
-    // Verify the Claude binary is executable.
-    let binary = &config.claude.binary_path;
-    let meta = std::fs::metadata(binary).map_err(|_| {
+    // Verify the AI tool binary is executable.
+    use crate::config::schema::AiTool;
+    let (binary, tool_name) = match config.ai_tool {
+        AiTool::Claude => {
+            let path = config
+                .claude
+                .as_ref()
+                .map(|c| c.binary_path.as_str())
+                .unwrap_or("");
+            (path.to_string(), "Claude")
+        }
+        AiTool::Kiro => {
+            let path = config
+                .kiro
+                .as_ref()
+                .map(|k| k.binary_path.as_str())
+                .unwrap_or("");
+            (path.to_string(), "Kiro")
+        }
+    };
+    let meta = std::fs::metadata(&binary).map_err(|_| {
         AppError::Friendly(FriendlyError::with_hint(
-            format!("Claude binary not found at '{binary}'"),
+            format!("{tool_name} binary not found at '{binary}'"),
             "Set the correct path with `devm8 config`.",
         ))
     })?;
@@ -50,24 +68,26 @@ pub async fn start_command() -> Result<(), AppError> {
         use std::os::unix::fs::PermissionsExt;
         if meta.permissions().mode() & 0o111 == 0 {
             return Err(AppError::Friendly(FriendlyError::with_hint(
-                format!("Claude binary at '{binary}' is not executable"),
+                format!("{tool_name} binary at '{binary}' is not executable"),
                 "Run `chmod +x <path>` to fix this.",
             )));
         }
     }
     let _ = meta;
 
-    // On Linux, verify bubblewrap is available when sandbox mode is enabled.
+    // On Linux with Claude, verify bubblewrap is available when sandbox mode is enabled.
     #[cfg(target_os = "linux")]
-    if config.claude.sandbox {
-        use std::process::Command as StdCommand;
-        if StdCommand::new("bwrap").arg("--version").output().is_err() {
-            return Err(AppError::Friendly(FriendlyError::with_hint(
-                "bubblewrap (bwrap) not found — required for sandbox mode".to_string(),
-                "Install with: apt install bubblewrap  \
-                 (or set claude.sandbox = false in your config to disable isolation)"
-                    .to_string(),
-            )));
+    if config.ai_tool == AiTool::Claude {
+        if config.claude.as_ref().map(|c| c.sandbox).unwrap_or(false) {
+            use std::process::Command as StdCommand;
+            if StdCommand::new("bwrap").arg("--version").output().is_err() {
+                return Err(AppError::Friendly(FriendlyError::with_hint(
+                    "bubblewrap (bwrap) not found — required for sandbox mode".to_string(),
+                    "Install with: apt install bubblewrap  \
+                     (or set claude.sandbox = false in your config to disable isolation)"
+                        .to_string(),
+                )));
+            }
         }
     }
 

@@ -2,33 +2,32 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 
 use crate::bot::state::PendingPermissions;
 use crate::bot::AppState;
+use crate::channel::{Button, ChannelSender, Keyboard, SentMessageRef};
 use crate::config::loader::{load_config, write_config};
 
 // ---------------------------------------------------------------------------
 // /permissions → show user list
 // ---------------------------------------------------------------------------
 
-pub async fn handle_permissions(bot: Bot, chat_id: ChatId, state: Arc<AppState>) -> Result<()> {
+pub async fn handle_permissions(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+) -> Result<()> {
     let text = user_list_text(&state);
     let keyboard = build_user_list_keyboard(&state);
 
-    let sent = bot
-        .send_message(chat_id, text)
-        .parse_mode(ParseMode::Html)
-        .reply_markup(keyboard)
-        .await?;
+    let sent = sender.send_with_keyboard(chat_id, &text, keyboard).await?;
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_permissions = Some(PendingPermissions {
             target_user_id: None,
             selected: HashSet::new(),
-            message_id: Some(sent.id.0),
+            message_id: Some(sent.message_id.clone()),
             awaiting_user_id_input: false,
         });
     }
@@ -41,20 +40,14 @@ pub async fn handle_permissions(bot: Bot, chat_id: ChatId, state: Arc<AppState>)
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_back(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
+    msg_ref: Option<SentMessageRef>,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
+    let message_id = pending_message_id(&state, chat_id);
 
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let message_id = pending_message_id(&state, chat_id.0);
-
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         if let Some(p) = cs.pending_permissions.as_mut() {
             p.target_user_id = None;
             p.selected.clear();
@@ -65,12 +58,12 @@ pub async fn handle_permissions_back(
     let text = user_list_text(&state);
     let keyboard = build_user_list_keyboard(&state);
 
-    if let Some(mid) = message_id {
-        let _ = bot
-            .edit_message_text(chat_id, MessageId(mid), text)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard)
-            .await;
+    let effective_ref = message_id
+        .map(|mid| SentMessageRef::new(chat_id, mid))
+        .or(msg_ref);
+
+    if let Some(ref r) = effective_ref {
+        sender.edit_with_keyboard(r, &text, keyboard).await?;
     }
 
     Ok(())
@@ -81,40 +74,30 @@ pub async fn handle_permissions_back(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_add(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
+    let message_id = pending_message_id(&state, chat_id);
 
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let message_id = pending_message_id(&state, chat_id.0);
-
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         if let Some(p) = cs.pending_permissions.as_mut() {
             p.awaiting_user_id_input = true;
             p.target_user_id = None;
         }
     }
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "🔙 Back",
-        "perms:back",
-    )]]);
+    let keyboard: Keyboard = vec![vec![Button::new("\u{1f519} Back", "perms:back")]];
 
     if let Some(mid) = message_id {
-        let _ = bot
-            .edit_message_text(
-                chat_id,
-                MessageId(mid),
+        let r = SentMessageRef::new(chat_id, mid);
+        sender
+            .edit_with_keyboard(
+                &r,
                 "Enter the Telegram user ID to configure access for:",
+                keyboard,
             )
-            .reply_markup(keyboard)
-            .await;
+            .await?;
     }
 
     Ok(())
@@ -125,19 +108,12 @@ pub async fn handle_permissions_add(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_user_select(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     target_id: i64,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
-
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    show_user_detail(bot, chat_id, state, target_id).await
+    show_user_detail(sender, chat_id, state, target_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -145,28 +121,25 @@ pub async fn handle_permissions_user_select(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_user_input(
-    bot: Bot,
-    msg: Message,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    text: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let text = msg.text().unwrap_or("").trim().to_string();
-
-    let target_id: i64 = match text.parse::<i64>() {
+    let target_id: i64 = match text.trim().parse::<i64>() {
         Ok(n) if n > 0 => n,
         _ => {
-            bot.send_message(
-                msg.chat.id,
-                "Invalid user ID — must be a positive integer. Try again:",
-            )
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Invalid user ID \u{2014} must be a positive integer. Try again:",
+                )
+                .await?;
             return Ok(());
         }
     };
 
-    // Best-effort: delete the admin's typed message to keep the chat clean.
-    let _ = bot.delete_message(msg.chat.id, msg.id).await;
-
-    show_user_detail(bot, msg.chat.id, state, target_id).await
+    show_user_detail(sender, chat_id, state, target_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -174,20 +147,13 @@ pub async fn handle_permissions_user_input(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_toggle(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     project_key: String,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
-
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let (target_user_id, new_selected, message_id) = {
-        let mut cs = state.chat_states.entry(chat_id.0).or_default();
+    let (target_user_id_str, new_selected, message_id) = {
+        let mut cs = state.chat_states.entry(chat_id.to_string()).or_default();
         let perm = match cs.pending_permissions.as_mut() {
             Some(p) if p.target_user_id.is_some() => p,
             _ => return Ok(()),
@@ -199,15 +165,18 @@ pub async fn handle_permissions_toggle(
             perm.selected.insert(project_key);
         }
 
-        (perm.target_user_id, perm.selected.clone(), perm.message_id)
+        (
+            perm.target_user_id.clone(),
+            perm.selected.clone(),
+            perm.message_id.clone(),
+        )
     };
 
-    if let (Some(mid), Some(uid)) = (message_id, target_user_id) {
+    if let (Some(mid), Some(uid_str)) = (message_id, target_user_id_str) {
+        let uid = uid_str.parse::<i64>().unwrap_or(0);
         let keyboard = build_user_detail_keyboard(&state, &new_selected, uid);
-        let _ = bot
-            .edit_message_reply_markup(chat_id, MessageId(mid))
-            .reply_markup(keyboard)
-            .await;
+        let r = SentMessageRef::new(chat_id, mid);
+        sender.edit_keyboard(&r, keyboard).await?;
     }
 
     Ok(())
@@ -218,26 +187,23 @@ pub async fn handle_permissions_toggle(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_done(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
-
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let (target_user_id, selected, message_id) = {
-        let cs = state.chat_states.get(&chat_id.0);
+    let (target_user_id_str, selected, message_id) = {
+        let cs = state.chat_states.get(chat_id);
         match cs.as_ref().and_then(|c| c.pending_permissions.as_ref()) {
-            Some(p) => (p.target_user_id, p.selected.clone(), p.message_id),
+            Some(p) => (
+                p.target_user_id.clone(),
+                p.selected.clone(),
+                p.message_id.clone(),
+            ),
             None => return Ok(()),
         }
     };
 
-    let target_user_id = match target_user_id {
+    let target_user_id: i64 = match target_user_id_str.as_deref().and_then(|s| s.parse().ok()) {
         Some(id) => id,
         None => return Ok(()),
     };
@@ -263,7 +229,7 @@ pub async fn handle_permissions_done(
 
     persist_project_access(&state).ok();
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         if let Some(p) = cs.pending_permissions.as_mut() {
             p.target_user_id = None;
             p.selected.clear();
@@ -275,11 +241,8 @@ pub async fn handle_permissions_done(
     let keyboard = build_user_list_keyboard(&state);
 
     if let Some(mid) = message_id {
-        let _ = bot
-            .edit_message_text(chat_id, MessageId(mid), text)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard)
-            .await;
+        let r = SentMessageRef::new(chat_id, mid);
+        sender.edit_with_keyboard(&r, &text, keyboard).await?;
     }
 
     Ok(())
@@ -290,19 +253,12 @@ pub async fn handle_permissions_done(
 // ---------------------------------------------------------------------------
 
 pub async fn handle_permissions_revoke(
-    bot: Bot,
-    query: CallbackQuery,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     target_id: i64,
 ) -> Result<()> {
-    let _ = bot.answer_callback_query(query.id.clone()).await;
-
-    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-
-    let message_id = pending_message_id(&state, chat_id.0);
+    let message_id = pending_message_id(&state, chat_id);
 
     {
         let mut access = state.project_access.write().unwrap();
@@ -314,7 +270,7 @@ pub async fn handle_permissions_revoke(
 
     persist_project_access(&state).ok();
 
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id.0) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         if let Some(p) = cs.pending_permissions.as_mut() {
             p.target_user_id = None;
             p.selected.clear();
@@ -326,11 +282,8 @@ pub async fn handle_permissions_revoke(
     let keyboard = build_user_list_keyboard(&state);
 
     if let Some(mid) = message_id {
-        let _ = bot
-            .edit_message_text(chat_id, MessageId(mid), text)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard)
-            .await;
+        let r = SentMessageRef::new(chat_id, mid);
+        sender.edit_with_keyboard(&r, &text, keyboard).await?;
     }
 
     Ok(())
@@ -341,8 +294,8 @@ pub async fn handle_permissions_revoke(
 // ---------------------------------------------------------------------------
 
 async fn show_user_detail(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
     target_id: i64,
 ) -> Result<()> {
@@ -362,14 +315,14 @@ async fn show_user_detail(
             .collect()
     };
 
-    let message_id = pending_message_id(&state, chat_id.0);
+    let message_id = pending_message_id(&state, chat_id);
 
     {
-        let mut entry = state.chat_states.entry(chat_id.0).or_default();
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_permissions = Some(PendingPermissions {
-            target_user_id: Some(target_id),
+            target_user_id: Some(target_id.to_string()),
             selected: current_selected.clone(),
-            message_id,
+            message_id: message_id.clone(),
             awaiting_user_id_input: false,
         });
     }
@@ -379,14 +332,14 @@ async fn show_user_detail(
     let is_in_allowed = state.config.telegram.allowed_user_ids.contains(&target_id);
 
     let mut header = format!(
-        "👤 <b>{}</b> (<code>{}</code>)",
+        "\u{1f464} <b>{}</b> (<code>{}</code>)",
         html_escape(&name),
         target_id,
     );
     if is_admin_user {
-        header.push_str("\n🔑 <i>Admin — full access to all features</i>");
+        header.push_str("\n\u{1f511} <i>Admin \u{2014} full access to all features</i>");
     } else if is_in_allowed {
-        header.push_str("\n✅ <i>In allowed_user_ids — base bot access</i>");
+        header.push_str("\n\u{2705} <i>In allowed_user_ids \u{2014} base bot access</i>");
     }
 
     if all_projects.is_empty() {
@@ -398,11 +351,8 @@ async fn show_user_detail(
     let keyboard = build_user_detail_keyboard(&state, &current_selected, target_id);
 
     if let Some(mid) = message_id {
-        let _ = bot
-            .edit_message_text(chat_id, MessageId(mid), header)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(keyboard)
-            .await;
+        let r = SentMessageRef::new(chat_id, mid);
+        sender.edit_with_keyboard(&r, &header, keyboard).await?;
     }
 
     Ok(())
@@ -412,11 +362,11 @@ async fn show_user_detail(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn pending_message_id(state: &AppState, chat_id: i64) -> Option<i32> {
+fn pending_message_id(state: &AppState, chat_id: &str) -> Option<String> {
     state
         .chat_states
-        .get(&chat_id)
-        .and_then(|c| c.pending_permissions.as_ref().and_then(|p| p.message_id))
+        .get(chat_id)
+        .and_then(|c| c.pending_permissions.as_ref().and_then(|p| p.message_id.clone()))
 }
 
 /// All user IDs known to the bot: union of allowed_user_ids and project_access values, sorted.
@@ -450,15 +400,15 @@ fn user_display_name(state: &AppState, user_id: i64) -> String {
 fn user_list_text(state: &AppState) -> String {
     let users = all_known_user_ids(state);
     if users.is_empty() {
-        "👥 <b>Bot Users</b>\n\nNo users configured yet. Add one below.".to_string()
+        "\u{1f465} <b>Bot Users</b>\n\nNo users configured yet. Add one below.".to_string()
     } else {
-        "👥 <b>Bot Users</b>\n\nSelect a user to manage their access:".to_string()
+        "\u{1f465} <b>Bot Users</b>\n\nSelect a user to manage their access:".to_string()
     }
 }
 
-fn build_user_list_keyboard(state: &AppState) -> InlineKeyboardMarkup {
+fn build_user_list_keyboard(state: &AppState) -> Keyboard {
     let users = all_known_user_ids(state);
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let mut rows: Keyboard = Vec::new();
 
     for user_id in &users {
         let name = user_display_name(state, *user_id);
@@ -466,82 +416,76 @@ fn build_user_list_keyboard(state: &AppState) -> InlineKeyboardMarkup {
         let is_allowed = state.config.telegram.allowed_user_ids.contains(user_id);
 
         let badge = if is_admin {
-            " 🔑"
+            " \u{1f511}"
         } else if is_allowed {
-            " ✅"
+            " \u{2705}"
         } else {
-            " 🔒"
+            " \u{1f512}"
         };
 
-        rows.push(vec![InlineKeyboardButton::callback(
-            format!("👤 {}{}", name, badge),
+        rows.push(vec![Button::new(
+            format!("\u{1f464} {}{}", name, badge),
             format!("perms:user:{}", user_id),
         )]);
     }
 
-    rows.push(vec![InlineKeyboardButton::callback(
-        "➕ Add new user",
+    rows.push(vec![Button::new(
+        "\u{2795} Add new user",
         "perms:add",
     )]);
 
-    InlineKeyboardMarkup::new(rows)
+    rows
 }
 
 fn build_user_detail_keyboard(
     state: &AppState,
     selected: &HashSet<String>,
     target_id: i64,
-) -> InlineKeyboardMarkup {
+) -> Keyboard {
     let jira_keys = jira_project_keys(state);
     let git_keys = git_project_keys(state);
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let mut rows: Keyboard = Vec::new();
 
     if !jira_keys.is_empty() {
-        rows.push(vec![InlineKeyboardButton::callback(
-            "── 📋 Jira projects ──",
+        rows.push(vec![Button::new(
+            "\u{2500}\u{2500} \u{1f4cb} Jira projects \u{2500}\u{2500}",
             "perms:noop",
         )]);
         for key in &jira_keys {
             let label = if selected.contains(key) {
-                format!("✅ {}", key)
+                format!("\u{2705} {}", key)
             } else {
-                format!("⬜ {}", key)
+                format!("\u{2b1c} {}", key)
             };
-            rows.push(vec![InlineKeyboardButton::callback(
-                label,
-                format!("perms:toggle:{}", key),
-            )]);
+            rows.push(vec![Button::new(label, format!("perms:toggle:{}", key))]);
         }
     }
 
     if !git_keys.is_empty() {
-        rows.push(vec![InlineKeyboardButton::callback(
-            "── 📁 Git projects ──",
+        rows.push(vec![Button::new(
+            "\u{2500}\u{2500} \u{1f4c1} Git projects \u{2500}\u{2500}",
             "perms:noop",
         )]);
         for key in &git_keys {
             let label = if selected.contains(key) {
-                format!("✅ {}", key)
+                format!("\u{2705} {}", key)
             } else {
-                format!("⬜ {}", key)
+                format!("\u{2b1c} {}", key)
             };
-            rows.push(vec![InlineKeyboardButton::callback(
-                label,
-                format!("perms:toggle:{}", key),
-            )]);
+            rows.push(vec![Button::new(label, format!("perms:toggle:{}", key))]);
         }
     }
 
     rows.push(vec![
-        InlineKeyboardButton::callback("✔ Done", "perms:done"),
-        InlineKeyboardButton::callback("🗑 Revoke all", format!("perms:revoke:{}", target_id)),
+        Button::new("\u{2714} Done", "perms:done"),
+        Button::new(
+            "\u{1f5d1} Revoke all",
+            format!("perms:revoke:{}", target_id),
+        ),
     ]);
-    rows.push(vec![InlineKeyboardButton::callback(
-        "🔙 Back",
-        "perms:back",
-    )]);
+    rows.push(vec![Button::new("\u{1f519} Back", "perms:back")]);
 
-    InlineKeyboardMarkup::new(rows)
+    rows
 }
 
 fn html_escape(s: &str) -> String {

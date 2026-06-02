@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use inquire::{Confirm, MultiSelect, Select, Text};
 
 use crate::config::schema::{
-    AppConfig, AppSettings, ClaudeConfig, JiraConfig, LogLevel, SlackConfig, TelegramConfig,
+    AiTool, AppConfig, AppSettings, ClaudeConfig, JiraConfig, KiroConfig, LogLevel, SlackConfig,
+    TelegramConfig,
 };
 
 use crate::config::validators;
@@ -24,9 +25,22 @@ use crate::shared::errors::AppError;
 pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
     println!("\n  devm8 configuration wizard\n");
 
+    let ai_tool = select_ai_tool(existing.map(|c| c.ai_tool))?;
+
     let telegram = collect_telegram(existing.map(|c| &c.telegram))?;
     let jira = collect_jira(existing.and_then(|c| c.jira.as_ref()))?;
-    let claude = collect_claude(existing.map(|c| &c.claude))?;
+
+    let (claude, kiro) = match ai_tool {
+        AiTool::Claude => {
+            let cfg = collect_claude(existing.and_then(|c| c.claude.as_ref()))?;
+            (Some(cfg), None)
+        }
+        AiTool::Kiro => {
+            let cfg = collect_kiro(existing.and_then(|c| c.kiro.as_ref()))?;
+            (None, Some(cfg))
+        }
+    };
+
     let default_keys: Vec<String> = jira
         .as_ref()
         .map(|j| j.project_keys.clone())
@@ -38,9 +52,11 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
     println!("\n  Configuration complete.\n");
 
     Ok(AppConfig {
+        ai_tool,
         telegram,
         jira,
         claude,
+        kiro,
         projects: if projects.is_empty() {
             None
         } else {
@@ -55,6 +71,26 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
 // ---------------------------------------------------------------------------
 // Section collectors
 // ---------------------------------------------------------------------------
+
+fn select_ai_tool(existing: Option<AiTool>) -> Result<AiTool, AppError> {
+    println!("--- AI Tool ---");
+
+    let options = vec!["claude", "kiro"];
+    let default_idx = match existing {
+        Some(AiTool::Kiro) => 1,
+        _ => 0,
+    };
+
+    let choice = Select::new("Select AI tool:", options)
+        .with_starting_cursor(default_idx)
+        .prompt()
+        .map_err(|e| prompt_err("ai_tool", e))?;
+
+    match choice {
+        "kiro" => Ok(AiTool::Kiro),
+        _ => Ok(AiTool::Claude),
+    }
+}
 
 fn collect_telegram(existing: Option<&TelegramConfig>) -> Result<TelegramConfig, AppError> {
     println!("--- Telegram ---");
@@ -288,6 +324,25 @@ fn collect_claude(existing: Option<&ClaudeConfig>) -> Result<ClaudeConfig, AppEr
     })
 }
 
+fn collect_kiro(existing: Option<&KiroConfig>) -> Result<KiroConfig, AppError> {
+    println!("--- Kiro ---");
+
+    let binary_path = Text::new("Path to kiro binary (e.g. /usr/local/bin/kiro):")
+        .with_initial_value(existing.map(|c| c.binary_path.as_str()).unwrap_or(""))
+        .with_validator(|v: &str| {
+            Ok(validators::validate_binary_path(v)
+                .map(|e| inquire::validator::Validation::Invalid(e.into()))
+                .unwrap_or(inquire::validator::Validation::Valid))
+        })
+        .prompt()
+        .map_err(|e| prompt_err("kiro.binary_path", e))?;
+
+    Ok(KiroConfig {
+        binary_path,
+        timeout_ms: None,
+    })
+}
+
 fn collect_projects(
     project_keys: &[String],
     existing: Option<&HashMap<String, Vec<String>>>,
@@ -407,6 +462,11 @@ fn collect_slack(existing: Option<&SlackConfig>) -> Result<Option<SlackConfig>, 
     Ok(Some(SlackConfig {
         user_token,
         poll_interval_ms,
+        bot_token: None,
+        app_token: None,
+        allowed_user_ids: vec![],
+        admin_user_id: None,
+        project_access: std::collections::HashMap::new(),
     }))
 }
 

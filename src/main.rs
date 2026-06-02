@@ -1,6 +1,8 @@
 mod bot;
+mod channel;
 mod claude;
 mod commands;
+mod kiro;
 mod config;
 mod daemon;
 mod git;
@@ -8,6 +10,7 @@ mod jira;
 mod logger;
 mod shared;
 mod slack;
+mod slack_bot;
 
 use clap::{Parser, Subcommand};
 

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
@@ -14,7 +15,23 @@ use crate::shared::errors::{AppError, ClaudeError};
 
 use super::types::{AskOptions, ClaudeClientConfig, UsageInfo};
 
-const DEFAULT_TIMEOUT_MS: u64 = 300_000;
+/// Abstraction over AI CLI tools (Claude, Kiro, etc.).
+#[async_trait]
+pub trait AiClient: Send + Sync {
+    async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<(String, UsageInfo), AppError>;
+
+    /// Build a sandboxed shell command. Default impl: plain `sh -c`.
+    fn sandboxed_sh_command(&self, cwd: Option<&str>, shell_cmd: &str) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", shell_cmd]);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd
+    }
+}
+
+const DEFAULT_TIMEOUT_MS: u64 = 900_000;
 const PROGRESS_INTERVAL_MS: u64 = 2_000;
 const SIGTERM_GRACE_MS: u64 = 2_000;
 
@@ -454,6 +471,17 @@ impl ClaudeClient {
             }
             _ => {}
         }
+    }
+}
+
+#[async_trait]
+impl AiClient for ClaudeClient {
+    async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<(String, UsageInfo), AppError> {
+        self.ask(prompt, opts).await
+    }
+
+    fn sandboxed_sh_command(&self, cwd: Option<&str>, shell_cmd: &str) -> Command {
+        self.sandboxed_sh_command(cwd, shell_cmd)
     }
 }
 
