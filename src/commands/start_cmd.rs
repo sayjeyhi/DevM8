@@ -77,17 +77,17 @@ pub async fn start_command() -> Result<(), AppError> {
 
     // On Linux with Claude, verify bubblewrap is available when sandbox mode is enabled.
     #[cfg(target_os = "linux")]
-    if config.ai_tool == AiTool::Claude {
-        if config.claude.as_ref().map(|c| c.sandbox).unwrap_or(false) {
-            use std::process::Command as StdCommand;
-            if StdCommand::new("bwrap").arg("--version").output().is_err() {
-                return Err(AppError::Friendly(FriendlyError::with_hint(
-                    "bubblewrap (bwrap) not found — required for sandbox mode".to_string(),
-                    "Install with: apt install bubblewrap  \
-                     (or set claude.sandbox = false in your config to disable isolation)"
-                        .to_string(),
-                )));
-            }
+    if config.ai_tool == AiTool::Claude
+        && config.claude.as_ref().map(|c| c.sandbox).unwrap_or(false)
+    {
+        use std::process::Command as StdCommand;
+        if StdCommand::new("bwrap").arg("--version").output().is_err() {
+            return Err(AppError::Friendly(FriendlyError::with_hint(
+                "bubblewrap (bwrap) not found — required for sandbox mode".to_string(),
+                "Install with: apt install bubblewrap  \
+                 (or set claude.sandbox = false in your config to disable isolation)"
+                    .to_string(),
+            )));
         }
     }
 
