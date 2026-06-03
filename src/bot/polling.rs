@@ -108,43 +108,39 @@ pub async fn start_polling(
 
     // Start Slack poller if configured
     let slack_cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let _slack_poller_handle =
-        if let (Some(slack_cfg), Some(slack_client)) = (&config.slack, state.slack.clone()) {
-            let bot_clone = bot.clone();
-            let allowed_ids_clone = allowed_ids.clone();
-            let interval_ms = slack_cfg.poll_interval_ms;
-            let cancelled_clone = Arc::clone(&slack_cancel_flag);
+    let _slack_poller_handle = if let (Some(slack_cfg), Some(slack_client)) =
+        (&config.slack, state.slack.clone())
+    {
+        let bot_clone = bot.clone();
+        let allowed_ids_clone = allowed_ids.clone();
+        let interval_ms = slack_cfg.poll_interval_ms;
+        let cancelled_clone = Arc::clone(&slack_cancel_flag);
 
-            let handle = tokio::spawn(async move {
-                use crate::slack::poller::{MessageHandler, SlackPoller};
+        let handle = tokio::spawn(async move {
+            use crate::slack::poller::{MessageHandler, SlackPoller};
 
-                let bot_inner = bot_clone.clone();
-                let ids: Vec<i64> = allowed_ids_clone.iter().copied().collect();
+            let bot_inner = bot_clone.clone();
+            let ids: Vec<i64> = allowed_ids_clone.iter().copied().collect();
 
-                let on_message: MessageHandler = Box::new(move |new_msg| {
-                    let bot = bot_inner.clone();
-                    let ids = ids.clone();
-                    Box::pin(async move {
-                        let sender: Arc<dyn crate::channel::ChannelSender> =
-                            Arc::new(TelegramSender::new(bot));
-                        let chat_ids: Vec<String> =
-                            ids.iter().map(|id| id.to_string()).collect();
-                        crate::bot::handlers::create_slack_forward_handler(
-                            sender,
-                            chat_ids,
-                            &new_msg,
-                        )
+            let on_message: MessageHandler = Box::new(move |new_msg| {
+                let bot = bot_inner.clone();
+                let ids = ids.clone();
+                Box::pin(async move {
+                    let sender: Arc<dyn crate::channel::ChannelSender> =
+                        Arc::new(TelegramSender::new(bot));
+                    let chat_ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+                    crate::bot::handlers::create_slack_forward_handler(sender, chat_ids, &new_msg)
                         .await
-                    })
-                });
-
-                let poller = SlackPoller::new(slack_client, interval_ms, on_message, None);
-                poller.start(cancelled_clone).await;
+                })
             });
-            Some(handle)
-        } else {
-            None
-        };
+
+            let poller = SlackPoller::new(slack_client, interval_ms, on_message, None);
+            poller.start(cancelled_clone).await;
+        });
+        Some(handle)
+    } else {
+        None
+    };
 
     let ct_slack = ct.clone();
     let cancel_flag_clone = Arc::clone(&slack_cancel_flag);
@@ -154,12 +150,18 @@ pub async fn start_polling(
     });
 
     // Start Slack Socket Mode bot if app_token + bot_token are configured.
-    if config.slack.as_ref().map(|s| s.bot_enabled()).unwrap_or(false) {
+    if config
+        .slack
+        .as_ref()
+        .map(|s| s.bot_enabled())
+        .unwrap_or(false)
+    {
         let ct_socket = ct.clone();
         let state_socket = Arc::clone(&state);
         let logger_socket = Arc::clone(logger);
         tokio::spawn(async move {
-            let _ = crate::slack_bot::bot::start_slack_bot(ct_socket, state_socket, &logger_socket).await;
+            let _ = crate::slack_bot::bot::start_slack_bot(ct_socket, state_socket, &logger_socket)
+                .await;
         });
     }
 
@@ -227,9 +229,7 @@ async fn dispatch_command(
     if !is_authorized(&msg, &allowed_ids, &state) {
         state.logger.warn(
             "unauthorized command attempt",
-            Some(
-                &serde_json::json!({ "user_id": user_id_i64, "chat_id": msg.chat.id.0 }),
-            ),
+            Some(&serde_json::json!({ "user_id": user_id_i64, "chat_id": msg.chat.id.0 })),
         );
         let uname = msg.from.as_ref().map(format_user_name).unwrap_or_default();
         let raw_text = msg.text().unwrap_or("").to_string();
@@ -326,10 +326,7 @@ async fn dispatch_command(
         BotCommand::Admin => {
             if !is_admin(user_id_i64, &state) {
                 sender
-                    .send(
-                        &chat_id,
-                        "Access denied. This command is admin-only.",
-                    )
+                    .send(&chat_id, "Access denied. This command is admin-only.")
                     .await?;
                 return Ok(());
             }
@@ -378,10 +375,13 @@ async fn dispatch_callback(
             return Ok(());
         }
     };
-    let msg_ref_opt = query.message.as_ref().map(|m| crate::channel::SentMessageRef {
-        chat_id: chat_id.clone(),
-        message_id: m.id().0.to_string(),
-    });
+    let msg_ref_opt = query
+        .message
+        .as_ref()
+        .map(|m| crate::channel::SentMessageRef {
+            chat_id: chat_id.clone(),
+            message_id: m.id().0.to_string(),
+        });
 
     // Answer the callback query first
     let _ = bot.answer_callback_query(query.id.clone()).await;
@@ -554,13 +554,8 @@ async fn dispatch_callback(
         }
         if let Some(rest) = data.strip_prefix("perms:revoke:") {
             if let Ok(target_id) = rest.parse::<i64>() {
-                return handle_permissions_revoke(
-                    Arc::clone(&sender),
-                    &chat_id,
-                    state,
-                    target_id,
-                )
-                .await;
+                return handle_permissions_revoke(Arc::clone(&sender), &chat_id, state, target_id)
+                    .await;
             }
         }
         return Ok(());
@@ -583,9 +578,7 @@ async fn dispatch_message(
         if let Some(u) = &msg.from {
             state.logger.warn(
                 "unauthorized message attempt",
-                Some(
-                    &serde_json::json!({ "user_id": u.id.0, "chat_id": msg.chat.id.0 }),
-                ),
+                Some(&serde_json::json!({ "user_id": u.id.0, "chat_id": msg.chat.id.0 })),
             );
             let uname = format_user_name(u);
             let preview = truncate_for_audit(msg.text().unwrap_or(""));
@@ -745,13 +738,7 @@ async fn dispatch_message(
 
     if waiting_for_user_id {
         let text = msg.text().unwrap_or("").trim().to_string();
-        return handle_permissions_user_input(
-            Arc::clone(&sender),
-            &chat_id,
-            &text,
-            state,
-        )
-        .await;
+        return handle_permissions_user_input(Arc::clone(&sender), &chat_id, &text, state).await;
     }
 
     // Check pending comment
@@ -818,14 +805,7 @@ async fn dispatch_message(
 
     if has_pending_ask {
         let text = msg.text().unwrap_or("").trim().to_string();
-        return handle_ask_text_input(
-            Arc::clone(&sender),
-            &chat_id,
-            &user_id,
-            text,
-            state,
-        )
-        .await;
+        return handle_ask_text_input(Arc::clone(&sender), &chat_id, &user_id, text, state).await;
     }
 
     // Check pending Slack reply
@@ -837,13 +817,7 @@ async fn dispatch_message(
 
     if has_pending_slack {
         let text = msg.text().unwrap_or("").trim().to_string();
-        return handle_pending_slack_reply(
-            Arc::clone(&sender),
-            &chat_id,
-            &text,
-            state,
-        )
-        .await;
+        return handle_pending_slack_reply(Arc::clone(&sender), &chat_id, &text, state).await;
     }
 
     let text = msg.text().unwrap_or("").trim().to_string();
@@ -852,9 +826,7 @@ async fn dispatch_message(
     }
 
     if text.starts_with('/') {
-        sender
-            .send(&chat_id, "Unknown command. Try /help")
-            .await?;
+        sender.send(&chat_id, "Unknown command. Try /help").await?;
         return Ok(());
     }
 

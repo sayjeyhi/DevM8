@@ -151,7 +151,6 @@ pub struct SlackConfig {
     pub poll_interval_ms: u64,
 
     // ---- Slack Bot (Socket Mode) ----
-
     /// xoxb-… Bot token.  Required for the interactive Slack bot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_token: Option<String>,

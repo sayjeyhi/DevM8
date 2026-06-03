@@ -118,8 +118,7 @@ impl AiClient for KiroClient {
                 }
             }
             Ok(Err(e)) => {
-                self.logger
-                    .error(&format!("kiro: stream error: {e}"), None);
+                self.logger.error(&format!("kiro: stream error: {e}"), None);
                 Err(e)
             }
             Err(_elapsed) => {
@@ -148,8 +147,7 @@ async fn collect_output(
 
     let mut text_lines: Vec<String> = Vec::new();
 
-    let mut progress_ticker =
-        tokio::time::interval(Duration::from_millis(2_000));
+    let mut progress_ticker = tokio::time::interval(Duration::from_millis(2_000));
     progress_ticker.tick().await;
 
     let stderr_handle = tokio::spawn(async move {

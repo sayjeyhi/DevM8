@@ -49,10 +49,7 @@ pub async fn handle_comment(
                 .logger
                 .info("comment: comment added", Some(&json!({ "key": &key })));
             sender
-                .send(
-                    chat_id,
-                    &format!("Comment added to <b>{}</b>", key),
-                )
+                .send(chat_id, &format!("Comment added to <b>{}</b>", key))
                 .await?;
         }
         Err(e) => {
@@ -105,10 +102,7 @@ pub async fn handle_pending_comment(
                 Some(&json!({ "key": &issue_key })),
             );
             sender
-                .send(
-                    chat_id,
-                    &format!("Comment added to <b>{}</b>", issue_key),
-                )
+                .send(chat_id, &format!("Comment added to <b>{}</b>", issue_key))
                 .await?;
         }
         Err(e) => {

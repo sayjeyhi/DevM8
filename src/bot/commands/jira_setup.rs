@@ -22,7 +22,10 @@ pub async fn handle_jira_setup_start(
                 Button::new("\u{1f5d1} Disconnect", "jira:setup_clear"),
             ],
             vec![Button::new("\u{1f4cb} My Projects", "jira:projects")],
-            vec![Button::new("\u{2b50} Favorite Statuses", "jira:fav_statuses")],
+            vec![Button::new(
+                "\u{2b50} Favorite Statuses",
+                "jira:fav_statuses",
+            )],
         ];
         sender
             .send_with_keyboard(
@@ -134,8 +137,7 @@ pub async fn handle_jira_setup_input(
                     .chat_states
                     .entry(chat_id.to_string())
                     .or_default()
-                    .pending_jira_action =
-                    Some(JiraPendingAction::JiraSetupToken(base_url, email));
+                    .pending_jira_action = Some(JiraPendingAction::JiraSetupToken(base_url, email));
                 return Ok(());
             }
 
@@ -203,10 +205,7 @@ pub async fn handle_jira_setup_input(
                         if let Err(e) = update_user_jira(uid_i64, Some(&cfg)) {
                             state.remove_user_jira(user_id);
                             sender
-                                .send(
-                                    chat_id,
-                                    &format!("\u{274c} Could not save config: {e}"),
-                                )
+                                .send(chat_id, &format!("\u{274c} Could not save config: {e}"))
                                 .await?;
                             return Ok(());
                         }
@@ -354,9 +353,7 @@ pub async fn handle_jira_setup_project_done(
     sender
         .edit_text(
             &msg_ref,
-            &format!(
-                "\u{2705} Jira account saved.\nProjects: <b>{summary}</b>"
-            ),
+            &format!("\u{2705} Jira account saved.\nProjects: <b>{summary}</b>"),
         )
         .await?;
 
@@ -386,10 +383,7 @@ pub async fn handle_jira_clear(
     Ok(())
 }
 
-fn project_picker_keyboard(
-    projects: &[(String, String)],
-    selected: &[String],
-) -> Vec<Vec<Button>> {
+fn project_picker_keyboard(projects: &[(String, String)], selected: &[String]) -> Vec<Vec<Button>> {
     build_picker_keyboard(
         projects,
         selected,
@@ -524,8 +518,7 @@ pub async fn handle_jira_manage_project_toggle(
             .chat_states
             .entry(chat_id.to_string())
             .or_default()
-            .pending_jira_action =
-            Some(JiraPendingAction::JiraManageProjects(projects, selected));
+            .pending_jira_action = Some(JiraPendingAction::JiraManageProjects(projects, selected));
     }
 
     Ok(())
@@ -606,9 +599,7 @@ pub async fn handle_jira_manage_project_done(
     sender
         .edit_text(
             &msg_ref,
-            &format!(
-                "\u{2705} Projects updated.\nActive: <b>{summary}</b>"
-            ),
+            &format!("\u{2705} Projects updated.\nActive: <b>{summary}</b>"),
         )
         .await?;
 
@@ -619,10 +610,7 @@ pub async fn handle_jira_manage_project_done(
 // Favorite statuses picker
 // ---------------------------------------------------------------------------
 
-fn fav_status_picker_keyboard(
-    all_statuses: &[String],
-    selected: &[String],
-) -> Vec<Vec<Button>> {
+fn fav_status_picker_keyboard(all_statuses: &[String], selected: &[String]) -> Vec<Vec<Button>> {
     let mut rows: Vec<Vec<Button>> = all_statuses
         .iter()
         .map(|name| {
@@ -810,9 +798,7 @@ pub async fn handle_jira_fav_status_done(
     sender
         .edit_text(
             &msg_ref,
-            &format!(
-                "\u{2b50} Favorite statuses saved.\nShown in filter: <b>{summary}</b>"
-            ),
+            &format!("\u{2b50} Favorite statuses saved.\nShown in filter: <b>{summary}</b>"),
         )
         .await?;
 

@@ -202,9 +202,7 @@ pub async fn handle_jira_action(
             let projects = accessible_project_keys(uid_i64, &state);
 
             if projects.is_empty() {
-                sender
-                    .send(chat_id, "No Jira projects configured.")
-                    .await?;
+                sender.send(chat_id, "No Jira projects configured.").await?;
                 return Ok(());
             }
 
@@ -349,8 +347,16 @@ pub async fn handle_jira_input_with_text(
 
         // Step 3b: user sent their own description instead of using Claude's
         JiraPendingAction::CreateDescription(pk, title, _suggested) => {
-            handle_create_confirm(Arc::clone(&sender), chat_id, state, user_id, &pk, &title, &text)
-                .await
+            handle_create_confirm(
+                Arc::clone(&sender),
+                chat_id,
+                state,
+                user_id,
+                &pk,
+                &title,
+                &text,
+            )
+            .await
         }
 
         JiraPendingAction::Move => {

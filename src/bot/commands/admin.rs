@@ -41,9 +41,7 @@ pub async fn handle_admin_action(
 ) -> Result<()> {
     match action_data {
         "admin:permissions" => handle_permissions(Arc::clone(&sender), chat_id, state).await,
-        "admin:logs" => {
-            handle_logs(Arc::clone(&sender), chat_id, state, String::new()).await
-        }
+        "admin:logs" => handle_logs(Arc::clone(&sender), chat_id, state, String::new()).await,
         "admin:audit_logs" => {
             handle_audit_logs(Arc::clone(&sender), chat_id, state, String::new()).await
         }

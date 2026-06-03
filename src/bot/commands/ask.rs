@@ -79,10 +79,7 @@ async fn send_repo_ready_message(
         vec![Button::new("\u{1f33f} New branch", "ask:branch")],
     ];
     if !clean {
-        rows.push(vec![Button::new(
-            "\u{2705} Commit changes",
-            "ask:commit",
-        )]);
+        rows.push(vec![Button::new("\u{2705} Commit changes", "ask:commit")]);
         rows.push(vec![Button::new(
             "\u{1f4e6} Stash changes",
             "ask:stash_only",
@@ -194,10 +191,7 @@ pub async fn ask_with_session(
             Box::pin(async move {
                 if !preview.is_empty() {
                     let _ = sender
-                        .edit_text(
-                            &sref,
-                            &format!("<pre>{}</pre>", sender.escape(&preview)),
-                        )
+                        .edit_text(&sref, &format!("<pre>{}</pre>", sender.escape(&preview)))
                         .await;
                 }
             })
@@ -315,13 +309,11 @@ pub async fn handle_ask(
     is_authorized_for: impl Fn(&str) -> bool,
 ) -> Result<()> {
     let question = args.trim().to_string();
-    
 
-    let all_repos: Vec<(String, std::path::PathBuf)> =
-        accessible_repos(&state, &is_authorized_for)
-            .into_iter()
-            .map(|(k, p, _)| (k, p))
-            .collect();
+    let all_repos: Vec<(String, std::path::PathBuf)> = accessible_repos(&state, &is_authorized_for)
+        .into_iter()
+        .map(|(k, p, _)| (k, p))
+        .collect();
 
     if all_repos.is_empty() {
         // No projects configured — ask without git context
@@ -458,8 +450,6 @@ pub async fn handle_ask_text_input(
         None => return Ok(()),
     };
 
-    
-
     match pending.mode {
         Some(AskMode::Branch) => {
             let git = pending.git.clone().or_else(|| {
@@ -536,10 +526,7 @@ pub async fn handle_ask_text_input(
                         sender
                             .send(
                                 chat_id,
-                                &format!(
-                                    "Committed with message: <b>{}</b>",
-                                    sender.escape(&text)
-                                ),
+                                &format!("Committed with message: <b>{}</b>", sender.escape(&text)),
                             )
                             .await?;
                         let keyboard = session_keyboard(pushed, Some(&git)).await;
@@ -626,10 +613,7 @@ pub async fn handle_ask_text_input(
                         exit_code
                     ));
                     if !stdout.trim().is_empty() {
-                        parts.push(format!(
-                            "<pre>{}</pre>",
-                            sender.escape(stdout.trim())
-                        ));
+                        parts.push(format!("<pre>{}</pre>", sender.escape(stdout.trim())));
                     }
                     if !stderr.trim().is_empty() {
                         parts.push(format!(
@@ -700,8 +684,6 @@ pub async fn handle_ask_session_callback(
     state: Arc<AppState>,
     is_authorized_for: impl Fn(&str) -> bool,
 ) -> Result<()> {
-    
-
     // Handle repo selection: ask:repo:<index>
     if action_data.starts_with("ask:repo:") {
         let idx: usize = action_data
@@ -746,9 +728,7 @@ pub async fn handle_ask_session_callback(
             if let Some(ref g) = session_git {
                 send_repo_ready_message(&sender, chat_id, &project_key, repo_name, g).await?;
             } else {
-                sender
-                    .send(chat_id, "What would you like to ask?")
-                    .await?;
+                sender.send(chat_id, "What would you like to ask?").await?;
             }
         }
 
@@ -783,10 +763,7 @@ pub async fn handle_ask_session_callback(
                     }
                     Err(e) => {
                         sender
-                            .send(
-                                chat_id,
-                                &format!("Pull failed: {e}\n\nType your question:"),
-                            )
+                            .send(chat_id, &format!("Pull failed: {e}\n\nType your question:"))
                             .await?;
                     }
                 }
@@ -836,9 +813,7 @@ pub async fn handle_ask_session_callback(
                             .await?;
                     }
                     Err(e) => {
-                        sender
-                            .send(chat_id, &format!("Stash failed: {e}"))
-                            .await?;
+                        sender.send(chat_id, &format!("Stash failed: {e}")).await?;
                     }
                 }
             } else {
@@ -859,10 +834,7 @@ pub async fn handle_ask_session_callback(
                 if !is_clean {
                     // Ask to stash or keep
                     let keyboard = vec![vec![
-                        Button::new(
-                            "\u{1f4e6} Stash first",
-                            "ask:branch_stash",
-                        ),
+                        Button::new("\u{1f4e6} Stash first", "ask:branch_stash"),
                         Button::new("\u{1f4cc} Keep changes", "ask:branch_keep"),
                     ]];
                     sender
@@ -902,9 +874,7 @@ pub async fn handle_ask_session_callback(
 
             if let Some(ref g) = git {
                 if let Err(e) = g.stash(Some("devm8: ask session stash")).await {
-                    sender
-                        .send(chat_id, &format!("Stash failed: {e}"))
-                        .await?;
+                    sender.send(chat_id, &format!("Stash failed: {e}")).await?;
                     return Ok(());
                 }
             }
@@ -962,9 +932,7 @@ pub async fn handle_ask_session_callback(
             if let Some(ref g) = git {
                 let diff = g.get_diff_stat().await.unwrap_or_default();
                 if diff.is_empty() {
-                    sender
-                        .send(chat_id, "No staged changes to commit.")
-                        .await?;
+                    sender.send(chat_id, "No staged changes to commit.").await?;
                     return Ok(());
                 }
 
@@ -1051,28 +1019,20 @@ pub async fn handle_ask_session_callback(
                         let branch = git.current_branch().await.unwrap_or_default();
                         let is_main = branch == "main" || branch == "master";
 
-                        state.logger.info(
-                            "ask: push complete",
-                            Some(&json!({ "branch": &branch })),
-                        );
-                        let text = format!(
-                            "Pushed branch <b>{}</b>.",
-                            sender.escape(&branch)
-                        );
+                        state
+                            .logger
+                            .info("ask: push complete", Some(&json!({ "branch": &branch })));
+                        let text = format!("Pushed branch <b>{}</b>.", sender.escape(&branch));
                         if !is_main {
                             let keyboard =
                                 vec![vec![Button::new("\u{1f500} Open PR", "ask:openpr")]];
-                            sender
-                                .send_with_keyboard(chat_id, &text, keyboard)
-                                .await?;
+                            sender.send_with_keyboard(chat_id, &text, keyboard).await?;
                         } else {
                             sender.send(chat_id, &text).await?;
                         }
                     }
                     Err(e) => {
-                        sender
-                            .send(chat_id, &format!("Push failed: {e}"))
-                            .await?;
+                        sender.send(chat_id, &format!("Push failed: {e}")).await?;
                     }
                 }
             } else {
@@ -1100,9 +1060,7 @@ pub async fn handle_ask_session_callback(
                         sender.send(chat_id, &text).await?;
                     }
                     Err(e) => {
-                        sender
-                            .send(chat_id, &format!("Pull failed: {e}"))
-                            .await?;
+                        sender.send(chat_id, &format!("Pull failed: {e}")).await?;
                     }
                 }
             } else {
@@ -1144,18 +1102,17 @@ pub async fn handle_ask_session_callback(
                 })
                 .unwrap_or_default();
             sender
-                .send(
-                    chat_id,
-                    &format!("Enter the command to run{}:", cwd_hint),
-                )
+                .send(chat_id, &format!("Enter the command to run{}:", cwd_hint))
                 .await?;
         }
 
         "end" => {
             let cleanup = state.chat_states.get(chat_id).and_then(|cs| {
-                cs.ask_session
-                    .as_ref()
-                    .and_then(|s| s.main_git.as_ref().map(|mg| (Arc::clone(mg), s.user_id.clone())))
+                cs.ask_session.as_ref().and_then(|s| {
+                    s.main_git
+                        .as_ref()
+                        .map(|mg| (Arc::clone(mg), s.user_id.clone()))
+                })
             });
             if let Some((main_git, uid)) = cleanup {
                 let _ = main_git.remove_worktree(&uid).await;

@@ -15,11 +15,11 @@ use dashmap::DashMap;
 use crate::claude::client::{AiClient, ClaudeClient};
 use crate::claude::types::ClaudeClientConfig;
 use crate::config::schema::{AiTool, AppConfig, UserJiraConfig};
-use crate::kiro::client::KiroClient;
-use crate::kiro::types::KiroClientConfig;
 use crate::git::GitClient;
 use crate::jira::client::JiraClient;
 use crate::jira::types::JiraClientConfig;
+use crate::kiro::client::KiroClient;
+use crate::kiro::types::KiroClientConfig;
 use crate::logger::audit::AuditLogger;
 use crate::logger::Logger;
 use crate::shared::paths::PATHS;
@@ -99,7 +99,12 @@ impl AppState {
     }
 
     pub fn slack_is_admin(&self, user_id: &str) -> bool {
-        match self.config.slack.as_ref().and_then(|s| s.admin_user_id.as_deref()) {
+        match self
+            .config
+            .slack
+            .as_ref()
+            .and_then(|s| s.admin_user_id.as_deref())
+        {
             Some(admin_id) => user_id == admin_id,
             None => true,
         }
@@ -123,7 +128,9 @@ impl AppState {
         if access.is_empty() {
             return true;
         }
-        let is_restricted = access.values().any(|ids| ids.iter().any(|id| id == user_id));
+        let is_restricted = access
+            .values()
+            .any(|ids| ids.iter().any(|id| id == user_id));
         match access.get(project_key) {
             None => !is_restricted,
             Some(ids) => ids.iter().any(|id| id == user_id),
@@ -181,8 +188,7 @@ impl AppState {
         match main_git.create_worktree(user_id).await {
             Ok(wt_path) => {
                 let wt_git = Arc::new(GitClient::new(wt_path.clone()));
-                let mut session =
-                    state::AskSession::new(user_id, Some(wt_path), Some(wt_git));
+                let mut session = state::AskSession::new(user_id, Some(wt_path), Some(wt_git));
                 session.main_git = Some(main_git);
                 session
             }
@@ -244,9 +250,10 @@ impl AppState {
 
         let ai: Arc<dyn AiClient> = match config.ai_tool {
             AiTool::Claude => {
-                let claude_cfg = config.claude.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("claude config missing but ai_tool = claude")
-                })?;
+                let claude_cfg = config
+                    .claude
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("claude config missing but ai_tool = claude"))?;
                 Arc::new(ClaudeClient::new(
                     ClaudeClientConfig {
                         binary_path: claude_cfg.binary_path.clone(),
@@ -259,9 +266,10 @@ impl AppState {
                 ))
             }
             AiTool::Kiro => {
-                let kiro_cfg = config.kiro.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("kiro config missing but ai_tool = kiro")
-                })?;
+                let kiro_cfg = config
+                    .kiro
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("kiro config missing but ai_tool = kiro"))?;
                 Arc::new(KiroClient::new(
                     KiroClientConfig {
                         binary_path: kiro_cfg.binary_path.clone(),

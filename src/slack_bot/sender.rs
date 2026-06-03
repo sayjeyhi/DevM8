@@ -165,7 +165,11 @@ impl ChannelSender for SlackSender {
             .await
     }
 
-    async fn edit_keyboard(&self, msg_ref: &SentMessageRef, keyboard: Keyboard) -> anyhow::Result<()> {
+    async fn edit_keyboard(
+        &self,
+        msg_ref: &SentMessageRef,
+        keyboard: Keyboard,
+    ) -> anyhow::Result<()> {
         let elements: Vec<serde_json::Value> = keyboard
             .iter()
             .flat_map(|row| {

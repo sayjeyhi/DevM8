@@ -98,11 +98,7 @@ pub async fn solve_by_key(
             sender
                 .edit_text(
                     &status_ref,
-                    &format!(
-                        "Could not fetch <b>{}</b>: {}",
-                        sender.escape(issue_key),
-                        e
-                    ),
+                    &format!("Could not fetch <b>{}</b>: {}", sender.escape(issue_key), e),
                 )
                 .await?;
             return Ok(());
@@ -132,10 +128,7 @@ pub async fn solve_by_key(
             let preview = lines.join("").chars().take(200).collect::<String>();
             Box::pin(async move {
                 let text = if preview.is_empty() {
-                    format!(
-                        "Analyzing <b>{}</b> with Claude...",
-                        sender.escape(&key)
-                    )
+                    format!("Analyzing <b>{}</b> with Claude...", sender.escape(&key))
                 } else {
                     format!(
                         "Analyzing <b>{}</b>...\n\n<pre>{}</pre>",
@@ -170,10 +163,7 @@ pub async fn solve_by_key(
     sender
         .edit_text(
             &status_ref,
-            &format!(
-                "Analysis complete for <b>{}</b>",
-                sender.escape(issue_key)
-            ),
+            &format!("Analysis complete for <b>{}</b>", sender.escape(issue_key)),
         )
         .await?;
 
@@ -294,11 +284,7 @@ async fn grill_by_key(
             sender
                 .edit_text(
                     &status_ref,
-                    &format!(
-                        "Could not fetch <b>{}</b>: {}",
-                        sender.escape(issue_key),
-                        e
-                    ),
+                    &format!("Could not fetch <b>{}</b>: {}", sender.escape(issue_key), e),
                 )
                 .await?;
             return Ok(());
@@ -427,11 +413,7 @@ pub async fn handle_grill_answer(
         sender
             .send(
                 chat_id,
-                &format!(
-                    "<b>Q{}:</b> {}",
-                    q_count + 1,
-                    sender.escape(&next)
-                ),
+                &format!("<b>Q{}:</b> {}", q_count + 1, sender.escape(&next)),
             )
             .await?;
     } else {
@@ -681,9 +663,7 @@ pub async fn handle_branch_picker(
     let (issue_key, git) = match pending {
         Some(p) => (p.issue_key, p.git),
         None => {
-            sender
-                .send(chat_id, "No pending solve action.")
-                .await?;
+            sender.send(chat_id, "No pending solve action.").await?;
             return Ok(());
         }
     };
@@ -794,8 +774,7 @@ pub async fn handle_branch_choice(
                         .await?;
                     return Ok(());
                 }
-                let branch_name =
-                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let branch_name = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
                 state.logger.info(
                     "solve: creating branch",
                     Some(&json!({ "key": issue_key, "branch": &branch_name })),
@@ -831,8 +810,7 @@ pub async fn handle_branch_choice(
                     .await?;
             }
             "new" => {
-                let suggested =
-                    format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
                 state.logger.info(
                     "solve: awaiting branch name confirmation",
                     Some(&json!({ "key": issue_key, "suggested": &suggested })),
@@ -964,10 +942,7 @@ pub async fn handle_solve_branch_name_input(
     sender
         .send(
             chat_id,
-            &format!(
-                "Created branch <b>{}</b>.",
-                sender.escape(&branch_name)
-            ),
+            &format!("Created branch <b>{}</b>.", sender.escape(&branch_name)),
         )
         .await?;
 
@@ -1058,24 +1033,9 @@ pub async fn handle_solve(
     );
 
     if has_repos {
-        handle_repo_picker(
-            Arc::clone(&sender),
-            chat_id,
-            user_id,
-            state,
-            &issue_key,
-        )
-        .await
+        handle_repo_picker(Arc::clone(&sender), chat_id, user_id, state, &issue_key).await
     } else {
-        show_solve_action_picker(
-            Arc::clone(&sender),
-            chat_id,
-            state,
-            &issue_key,
-            None,
-            None,
-        )
-        .await
+        show_solve_action_picker(Arc::clone(&sender), chat_id, state, &issue_key, None, None).await
     }
 }
 

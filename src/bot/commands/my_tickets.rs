@@ -89,7 +89,10 @@ fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> Vec<Vec<B
             Button::new("\u{1f527} Solve", format!("tickets:solve:{}", issue_key)),
         ],
         vec![
-            Button::new("\u{1f504} Move", format!("tickets:move_start:{}", issue_key)),
+            Button::new(
+                "\u{1f504} Move",
+                format!("tickets:move_start:{}", issue_key),
+            ),
             Button::new(
                 "\u{1f4ac} Comment",
                 format!("tickets:comment_start:{}", issue_key),
@@ -146,9 +149,7 @@ pub async fn handle_my_tickets(
     let project_keys = accessible_project_keys(uid_i64, &state);
 
     if project_keys.is_empty() {
-        sender
-            .send(chat_id, "No project keys configured.")
-            .await?;
+        sender.send(chat_id, "No project keys configured.").await?;
         return Ok(());
     }
 
@@ -505,10 +506,7 @@ pub async fn handle_move_start(
     sender
         .send_with_keyboard(
             chat_id,
-            &format!(
-                "Select new status for <b>{}</b>:",
-                sender.escape(issue_key)
-            ),
+            &format!("Select new status for <b>{}</b>:", sender.escape(issue_key)),
             buttons,
         )
         .await?;
@@ -652,8 +650,7 @@ pub async fn handle_ticket_ask(
         // No git context — start session directly
         {
             let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-            entry.ask_session =
-                Some(AskSession::new(user_id, None, None).with_context(context));
+            entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
         }
         sender
             .send(
@@ -715,8 +712,7 @@ pub async fn handle_ticket_ask(
     {
         let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         // Store context temporarily; session will be created after repo selection
-        entry.ask_session =
-            Some(AskSession::new(user_id, None, None).with_context(context));
+        entry.ask_session = Some(AskSession::new(user_id, None, None).with_context(context));
         entry.pending_ask = Some(PendingAsk {
             repo_path: None,
             git: None,

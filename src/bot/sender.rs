@@ -1,12 +1,14 @@
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
+use teloxide::types::{
+    ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
+};
 use tokio::task::JoinHandle;
 
+use crate::bot::utils::split_message;
 use crate::channel::types::{Button, Keyboard, SentMessageRef};
 use crate::channel::ChannelSender;
-use crate::bot::utils::split_message;
 
 /// Telegram implementation of `ChannelSender`.
 pub struct TelegramSender {

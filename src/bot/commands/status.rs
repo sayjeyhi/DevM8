@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use sysinfo::{Disks, System};
 
-use crate::bot::AppState;
 use crate::bot::utils::escape_html;
+use crate::bot::AppState;
 use crate::channel::ChannelSender;
 use crate::daemon::agent_status;
 use crate::daemon::pid::{is_process_running, read_pid};

@@ -7,9 +7,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
 use crate::bot::AppState;
-use crate::channel::state::{
-    AdminPendingAction, JiraPendingAction,
-};
+use crate::channel::state::{AdminPendingAction, JiraPendingAction};
 use crate::logger::Logger;
 
 use super::sender::SlackSender;
@@ -300,10 +298,7 @@ async fn dispatch_slash_command(
             dispatch_admin_command(state, sender, chat_id, &user_id, logger).await;
         }
         other => {
-            logger.debug(
-                &format!("slack: unhandled slash command: {other}"),
-                None,
-            );
+            logger.debug(&format!("slack: unhandled slash command: {other}"), None);
         }
     }
 }
@@ -383,7 +378,9 @@ async fn dispatch_interactive(
                 }
             };
             if !auth_ok {
-                let _ = sender.send(chat_id, "Access denied for that project.").await;
+                let _ = sender
+                    .send(chat_id, "Access denied for that project.")
+                    .await;
                 return;
             }
             dispatch_jira_action(state, sender, chat_id, &user_id, &action_value, logger).await;
@@ -431,7 +428,10 @@ async fn dispatch_event(
     };
 
     let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let channel_type = event.get("channel_type").and_then(|v| v.as_str()).unwrap_or("");
+    let channel_type = event
+        .get("channel_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Only handle direct messages to the bot.
     if event_type != "message" || channel_type != "im" {
@@ -527,10 +527,7 @@ async fn dispatch_dm_message(
         .unwrap_or(false);
 
     if waiting_for_user_id {
-        dispatch_permissions_user_input(
-            state, sender, chat_id, user_id, text, logger,
-        )
-        .await;
+        dispatch_permissions_user_input(state, sender, chat_id, user_id, text, logger).await;
         return;
     }
 
@@ -605,10 +602,7 @@ use crate::bot::commands::{
     handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,
 };
 
-fn slack_auth_fn(
-    state: Arc<AppState>,
-    user_id: String,
-) -> impl Fn(&str) -> bool {
+fn slack_auth_fn(state: Arc<AppState>, user_id: String) -> impl Fn(&str) -> bool {
     move |pk: &str| state.slack_is_authorized_for_project(&user_id, pk)
 }
 
@@ -708,11 +702,14 @@ async fn dispatch_solve_action(
     _logger: &Arc<dyn Logger>,
 ) {
     if action.starts_with("solve:repo:") {
-        let _ = handle_solve_repo_callback(Arc::clone(&sender), chat_id, user_id, state, action).await;
+        let _ =
+            handle_solve_repo_callback(Arc::clone(&sender), chat_id, user_id, state, action).await;
         return;
     }
     if let Some(issue_key) = action.strip_prefix("solve:post:implement:") {
-        let _ = handle_post_analysis_implement(Arc::clone(&sender), chat_id, state, user_id, issue_key).await;
+        let _ =
+            handle_post_analysis_implement(Arc::clone(&sender), chat_id, state, user_id, issue_key)
+                .await;
         return;
     }
     if action.starts_with("solve:action:") {
@@ -800,7 +797,16 @@ async fn dispatch_jira_input(
     _logger: &Arc<dyn Logger>,
 ) {
     let auth = slack_auth_fn(Arc::clone(&state), user_id.to_string());
-    let _ = handle_jira_input_with_text(sender, chat_id, user_id, action, auth, state, text.to_string()).await;
+    let _ = handle_jira_input_with_text(
+        sender,
+        chat_id,
+        user_id,
+        action,
+        auth,
+        state,
+        text.to_string(),
+    )
+    .await;
 }
 
 async fn dispatch_permissions_user_input(
@@ -823,7 +829,8 @@ async fn dispatch_pending_comment(
     issue_key: &str,
     _logger: &Arc<dyn Logger>,
 ) {
-    let _ = handle_pending_comment(sender, chat_id, user_id, text, state, issue_key.to_string()).await;
+    let _ =
+        handle_pending_comment(sender, chat_id, user_id, text, state, issue_key.to_string()).await;
 }
 
 async fn dispatch_solve_branch_name_input(

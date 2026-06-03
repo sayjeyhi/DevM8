@@ -158,10 +158,7 @@ pub async fn handle_logs(
         remaining = remaining[split_at..].trim_start_matches('\n');
 
         sender
-            .send(
-                chat_id,
-                &format!("<pre>{}</pre>", sender.escape(chunk)),
-            )
+            .send(chat_id, &format!("<pre>{}</pre>", sender.escape(chunk)))
             .await?;
     }
 
@@ -229,10 +226,7 @@ pub async fn handle_audit_logs(
         let chunk = &remaining[..split_at];
         remaining = remaining[split_at..].trim_start_matches('\n');
         sender
-            .send(
-                chat_id,
-                &format!("<pre>{}</pre>", sender.escape(chunk)),
-            )
+            .send(chat_id, &format!("<pre>{}</pre>", sender.escape(chunk)))
             .await?;
     }
 

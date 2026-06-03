@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::bot::AppState;
 use crate::bot::utils::parse_first_and_rest;
+use crate::bot::AppState;
 use crate::channel::ChannelSender;
 use crate::commands::add_project_cmd::register_project;
 

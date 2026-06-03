@@ -171,25 +171,18 @@ pub async fn handle_slack_callback(
                         slack_msg.text
                     );
 
-                    let thinking_ref = sender
-                        .send(chat_id, "Generating AI draft...")
-                        .await?;
+                    let thinking_ref = sender.send(chat_id, "Generating AI draft...").await?;
 
                     match state.ai.ask(&prompt, AskOptions::default()).await {
                         Ok((draft, _)) => {
                             state.logger.info(
                                 "slack: AI draft generated",
-                                Some(
-                                    &json!({ "channel": &channel_id, "draft_len": draft.len() }),
-                                ),
+                                Some(&json!({ "channel": &channel_id, "draft_len": draft.len() })),
                             );
                             sender
                                 .edit_text(
                                     &thinking_ref,
-                                    &format!(
-                                        "AI draft:\n\n<pre>{}</pre>",
-                                        sender.escape(&draft)
-                                    ),
+                                    &format!("AI draft:\n\n<pre>{}</pre>", sender.escape(&draft)),
                                 )
                                 .await?;
 
@@ -227,19 +220,13 @@ pub async fn handle_slack_callback(
                                 .logger
                                 .error(&format!("slack: Claude error generating draft: {e}"), None);
                             sender
-                                .edit_text(
-                                    &thinking_ref,
-                                    &format!("Claude error: {e}"),
-                                )
+                                .edit_text(&thinking_ref, &format!("Claude error: {e}"))
                                 .await?;
                         }
                     }
                 } else {
                     sender
-                        .send(
-                            chat_id,
-                            "Could not retrieve the original Slack message.",
-                        )
+                        .send(chat_id, "Could not retrieve the original Slack message.")
                         .await?;
                 }
             } else {
@@ -285,8 +272,7 @@ pub async fn handle_slack_callback(
                         }
                     }
                     {
-                        let mut entry =
-                            state.chat_states.entry(chat_id.to_string()).or_default();
+                        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                         entry.pending_slack_reply = None;
                     }
                 } else {

@@ -363,10 +363,11 @@ async fn show_user_detail(
 // ---------------------------------------------------------------------------
 
 fn pending_message_id(state: &AppState, chat_id: &str) -> Option<String> {
-    state
-        .chat_states
-        .get(chat_id)
-        .and_then(|c| c.pending_permissions.as_ref().and_then(|p| p.message_id.clone()))
+    state.chat_states.get(chat_id).and_then(|c| {
+        c.pending_permissions
+            .as_ref()
+            .and_then(|p| p.message_id.clone())
+    })
 }
 
 /// All user IDs known to the bot: union of allowed_user_ids and project_access values, sorted.
@@ -429,10 +430,7 @@ fn build_user_list_keyboard(state: &AppState) -> Keyboard {
         )]);
     }
 
-    rows.push(vec![Button::new(
-        "\u{2795} Add new user",
-        "perms:add",
-    )]);
+    rows.push(vec![Button::new("\u{2795} Add new user", "perms:add")]);
 
     rows
 }
