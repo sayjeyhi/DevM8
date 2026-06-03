@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use teloxide::prelude::*;
-use teloxide::types::ParseMode;
 
 use crate::bot::AppState;
+use crate::channel::ChannelSender;
 
 pub const HELP_TEXT: &str = "\
 <b>DevM8 Commands</b>
@@ -46,9 +45,11 @@ pub const HELP_TEXT: &str = "\
 /help
   Show this reference.";
 
-pub async fn handle_help(bot: Bot, msg: Message, _state: Arc<AppState>) -> Result<()> {
-    bot.send_message(msg.chat.id, HELP_TEXT)
-        .parse_mode(ParseMode::Html)
-        .await?;
+pub async fn handle_help(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    _state: Arc<AppState>,
+) -> Result<()> {
+    sender.send(chat_id, HELP_TEXT).await?;
     Ok(())
 }

@@ -2,17 +2,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, ParseMode};
 
 use crate::bot::utils::parse_first_and_rest;
 use crate::bot::AppState;
+use crate::channel::ChannelSender;
 
 pub async fn handle_move(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     args: String,
 ) -> Result<()> {
     let args = args.trim().to_string();
@@ -20,13 +19,13 @@ pub async fn handle_move(
     let (key, status) = match parse_first_and_rest(&args) {
         Some(pair) => pair,
         None => {
-            bot.send_message(
-                chat_id,
-                "Send the issue key and target status:\n\
-                 <code>MYAPP-123 In Progress</code>",
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
+            sender
+                .send(
+                    chat_id,
+                    "Send the issue key and target status:\n\
+                     <code>MYAPP-123 In Progress</code>",
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -37,11 +36,12 @@ pub async fn handle_move(
     );
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.send_message(
-            chat_id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     match jira.transition_issue(&key, &status).await {
@@ -50,8 +50,11 @@ pub async fn handle_move(
                 "move: transition complete",
                 Some(&json!({ "key": &key, "status": &status })),
             );
-            bot.send_message(chat_id, format!("Moved <b>{}</b> \u{2192} {}", key, status))
-                .parse_mode(ParseMode::Html)
+            sender
+                .send(
+                    chat_id,
+                    &format!("Moved <b>{}</b> \u{2192} {}", key, status),
+                )
                 .await?;
         }
         Err(e) => {
@@ -59,7 +62,7 @@ pub async fn handle_move(
                 &format!("move: transition failed: {e}"),
                 Some(&json!({ "key": &key, "target_status": &status })),
             );
-            bot.send_message(chat_id, format!("Error: {e}")).await?;
+            sender.send(chat_id, &format!("Error: {e}")).await?;
         }
     }
 

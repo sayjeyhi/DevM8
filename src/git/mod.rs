@@ -173,8 +173,9 @@ impl GitClient {
     }
 
     /// Returns the path for a user-scoped worktree: `<repo>/.worktrees/<user_id>`.
-    pub fn worktree_path(&self, user_id: i64) -> PathBuf {
-        self.repo_path.join(".worktrees").join(user_id.to_string())
+    /// `user_id` is a string so it works for both Telegram numeric IDs and Slack "U…" IDs.
+    pub fn worktree_path(&self, user_id: &str) -> PathBuf {
+        self.repo_path.join(".worktrees").join(user_id)
     }
 
     /// Ensure `.worktrees/` is present in the repo's `.gitignore`.
@@ -211,7 +212,8 @@ impl GitClient {
     /// Any previous worktree for the same user is removed first.
     /// The worktree is placed at `<repo>/.worktrees/<user_id>/`.
     /// `.worktrees/` is automatically added to the repo's `.gitignore`.
-    pub async fn create_worktree(&self, user_id: i64) -> Result<PathBuf> {
+    /// `user_id` accepts both Telegram numeric strings and Slack "U…" IDs.
+    pub async fn create_worktree(&self, user_id: &str) -> Result<PathBuf> {
         self.ensure_gitignore_worktrees().await;
         let path = self.worktree_path(user_id);
         if path.exists() {
@@ -227,7 +229,7 @@ impl GitClient {
     }
 
     /// Remove the worktree for `user_id` and prune stale worktree metadata.
-    pub async fn remove_worktree(&self, user_id: i64) -> Result<()> {
+    pub async fn remove_worktree(&self, user_id: &str) -> Result<()> {
         let path = self.worktree_path(user_id);
         if path.exists() {
             let path_str = path.to_string_lossy().into_owned();

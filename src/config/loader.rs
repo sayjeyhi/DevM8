@@ -181,12 +181,35 @@ fn validate_config(config: &AppConfig) -> Result<(), AppError> {
         }
     }
 
-    // Claude
-    if let Some(msg) = validators::validate_binary_path(&config.claude.binary_path) {
-        return Err(AppError::Friendly(FriendlyError::with_hint(
-            format!("claude.binary_path: {msg}"),
-            "Make sure the Claude binary exists at the given path.",
-        )));
+    // AI tool binary
+    use crate::config::schema::AiTool;
+    match config.ai_tool {
+        AiTool::Claude => {
+            let path = config
+                .claude
+                .as_ref()
+                .map(|c| c.binary_path.as_str())
+                .unwrap_or("");
+            if let Some(msg) = validators::validate_binary_path(path) {
+                return Err(AppError::Friendly(FriendlyError::with_hint(
+                    format!("claude.binary_path: {msg}"),
+                    "Make sure the Claude binary exists at the given path.",
+                )));
+            }
+        }
+        AiTool::Kiro => {
+            let path = config
+                .kiro
+                .as_ref()
+                .map(|k| k.binary_path.as_str())
+                .unwrap_or("");
+            if let Some(msg) = validators::validate_binary_path(path) {
+                return Err(AppError::Friendly(FriendlyError::with_hint(
+                    format!("kiro.binary_path: {msg}"),
+                    "Make sure the Kiro binary exists at the given path.",
+                )));
+            }
+        }
     }
 
     Ok(())

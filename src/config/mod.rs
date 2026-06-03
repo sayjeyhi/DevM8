@@ -7,5 +7,6 @@ pub mod wizard;
 pub use loader::{config_exists, load_config, write_config};
 #[allow(unused_imports)]
 pub use schema::{
-    AppConfig, AppSettings, ClaudeConfig, JiraConfig, LogLevel, SlackConfig, TelegramConfig,
+    AiTool, AppConfig, AppSettings, ClaudeConfig, JiraConfig, KiroConfig, LogLevel, SlackConfig,
+    TelegramConfig,
 };

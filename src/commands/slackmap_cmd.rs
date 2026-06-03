@@ -101,6 +101,11 @@ pub async fn slackmap_command() -> Result<(), AppError> {
     config.slack = Some(SlackConfig {
         user_token,
         poll_interval_ms,
+        bot_token: None,
+        app_token: None,
+        allowed_user_ids: vec![],
+        admin_user_id: None,
+        project_access: std::collections::HashMap::new(),
     });
 
     write_config(&config, None)?;

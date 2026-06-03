@@ -30,8 +30,9 @@ pub enum AskMode {
 
 #[derive(Debug, Clone)]
 pub struct AskSession {
-    /// Telegram user_id that owns this session — used for worktree scoping.
-    pub user_id: i64,
+    /// Platform user ID as a string — used for worktree scoping.
+    /// Telegram: numeric ID string. Slack: "U…" ID.
+    pub user_id: String,
     pub repo_path: Option<PathBuf>,
     pub git: Option<Arc<GitClient>>,
     /// Present when `repo_path` is a per-user worktree; used for cleanup on session end.
@@ -44,9 +45,13 @@ pub struct AskSession {
 }
 
 impl AskSession {
-    pub fn new(user_id: i64, repo_path: Option<PathBuf>, git: Option<Arc<GitClient>>) -> Self {
+    pub fn new(
+        user_id: impl Into<String>,
+        repo_path: Option<PathBuf>,
+        git: Option<Arc<GitClient>>,
+    ) -> Self {
         Self {
-            user_id,
+            user_id: user_id.into(),
             repo_path,
             git,
             main_git: None,
@@ -197,11 +202,11 @@ pub enum JiraPendingAction {
 #[derive(Debug, Clone)]
 pub struct PendingPermissions {
     /// The user whose access is currently being edited; None when showing the user list.
-    pub target_user_id: Option<i64>,
+    pub target_user_id: Option<String>,
     /// Project keys currently toggled on.
     pub selected: HashSet<String>,
     /// ID of the single reused message (for in-place keyboard edits).
-    pub message_id: Option<i32>,
+    pub message_id: Option<String>,
     /// True when the admin clicked "Add new user" and we're waiting for a typed user ID.
     pub awaiting_user_id_input: bool,
 }

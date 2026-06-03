@@ -2,12 +2,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::state::JiraPendingAction;
-use crate::bot::utils::{escape_html, keep_typing};
 use crate::bot::AppState;
+use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
 
 const IMPROVE_PROMPT: &str = "\
@@ -45,40 +43,41 @@ fn parse_claude_response(response: &str) -> (String, String) {
 /// Step 1: receives the raw title, corrects it with Claude, generates a description
 /// suggestion, then shows it to the user with a "Use this" button.
 pub async fn handle_create_suggest(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    _user_id: i64,
+    _user_id: &str,
     project_key: String,
     title: String,
 ) -> Result<()> {
     if title.is_empty() {
-        bot.send_message(
-            chat_id,
-            "Send the issue title:\n<code>New login page</code>",
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
+        sender
+            .send(
+                chat_id,
+                "Send the issue title:\n<code>New login page</code>",
+            )
+            .await?;
         return Ok(());
     }
 
-    let thinking = bot
-        .send_message(chat_id, "Correcting title and generating description...")
+    let thinking_ref = sender
+        .send(chat_id, "Correcting title and generating description...")
         .await?;
-    let _typing = keep_typing(bot.clone(), chat_id);
+    let _typing = sender.start_typing(chat_id);
 
     let prompt = IMPROVE_PROMPT
         .replace("{project_key}", &project_key)
         .replace("{title}", &title);
 
-    let claude_output = match state.claude.ask(&prompt, AskOptions::default()).await {
+    let claude_output = match state.ai.ask(&prompt, AskOptions::default()).await {
         Ok((text, _)) => text,
         Err(e) => {
             state.logger.error(
                 &format!("create: Claude error: {e}"),
                 Some(&json!({ "title": &title })),
             );
-            bot.edit_message_text(chat_id, thinking.id, format!("Claude error: {e}"))
+            sender
+                .edit_text(&thinking_ref, &format!("Claude error: {e}"))
                 .await?;
             return Ok(());
         }
@@ -93,7 +92,7 @@ pub async fn handle_create_suggest(
 
     state
         .chat_states
-        .entry(chat_id.0)
+        .entry(chat_id.to_string())
         .or_default()
         .pending_jira_action = Some(JiraPendingAction::CreateDescription(
         project_key,
@@ -101,34 +100,33 @@ pub async fn handle_create_suggest(
         suggested_desc.clone(),
     ));
 
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-        "✅ Use this description",
+    let keyboard = vec![vec![Button::new(
+        "\u{2705} Use this description",
         "jira:create_confirm",
-    )]]);
+    )]];
 
-    bot.edit_message_text(
-        chat_id,
-        thinking.id,
-        format!(
-            "Corrected title: <b>{}</b>\n\nSuggested description:\n<pre>{}</pre>\n\n\
-             Tap <b>Use this description</b> or send your own below:",
-            escape_html(&corrected_title),
-            escape_html(&suggested_desc)
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(keyboard)
-    .await?;
+    sender
+        .edit_with_keyboard(
+            &thinking_ref,
+            &format!(
+                "Corrected title: <b>{}</b>\n\nSuggested description:\n<pre>{}</pre>\n\n\
+                 Tap <b>Use this description</b> or send your own below:",
+                sender.escape(&corrected_title),
+                sender.escape(&suggested_desc)
+            ),
+            keyboard,
+        )
+        .await?;
 
     Ok(())
 }
 
 /// Step 2: creates the Jira issue with the final (confirmed or custom) description.
 pub async fn handle_create_confirm(
-    bot: Bot,
-    chat_id: ChatId,
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
     state: Arc<AppState>,
-    user_id: i64,
+    user_id: &str,
     project_key: &str,
     title: &str,
     description: &str,
@@ -138,15 +136,15 @@ pub async fn handle_create_confirm(
         Some(&json!({ "project": project_key, "title": title })),
     );
 
-    let thinking = bot.send_message(chat_id, "Creating issue...").await?;
+    let thinking_ref = sender.send(chat_id, "Creating issue...").await?;
 
     let Some(jira) = state.jira_for_user(user_id) else {
-        bot.edit_message_text(
-            chat_id,
-            thinking.id,
-            "Please set up your Jira account first. Use /jira → My Jira.",
-        )
-        .await?;
+        sender
+            .edit_text(
+                &thinking_ref,
+                "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+            )
+            .await?;
         return Ok(());
     };
     let issue = match jira.create_issue(project_key, title, description).await {
@@ -156,7 +154,8 @@ pub async fn handle_create_confirm(
                 &format!("create: Jira error: {e}"),
                 Some(&json!({ "project": project_key, "title": title })),
             );
-            bot.edit_message_text(chat_id, thinking.id, format!("Jira error: {e}"))
+            sender
+                .edit_text(&thinking_ref, &format!("Jira error: {e}"))
                 .await?;
             return Ok(());
         }
@@ -167,16 +166,15 @@ pub async fn handle_create_confirm(
         Some(&json!({ "key": &issue.key, "url": &issue.url })),
     );
 
-    bot.edit_message_text(
-        chat_id,
-        thinking.id,
-        format!(
-            "Created: <a href=\"{}\">{}</a> — {}",
-            issue.url, issue.key, issue.summary
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .await?;
+    sender
+        .edit_text(
+            &thinking_ref,
+            &format!(
+                "Created: <a href=\"{}\">{}</a> \u{2014} {}",
+                issue.url, issue.key, issue.summary
+            ),
+        )
+        .await?;
 
     Ok(())
 }

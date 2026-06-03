@@ -60,6 +60,23 @@ fn default_sandbox() -> bool {
     cfg!(target_os = "linux")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AiTool {
+    #[default]
+    Claude,
+    Kiro,
+}
+
+impl std::fmt::Display for AiTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AiTool::Claude => write!(f, "claude"),
+            AiTool::Kiro => write!(f, "kiro"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeConfig {
     pub binary_path: String,
@@ -69,6 +86,12 @@ pub struct ClaudeConfig {
     /// Defaults to true on Linux, false on macOS.
     #[serde(default = "default_sandbox")]
     pub sandbox: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroConfig {
+    pub binary_path: String,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,13 +145,44 @@ impl std::str::FromStr for LogLevel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
+    /// xoxp-… user token used by the legacy Slack poller (DM forwarding).
     pub user_token: String,
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
+
+    // ---- Slack Bot (Socket Mode) ----
+
+    /// xoxb-… Bot token.  Required for the interactive Slack bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_token: Option<String>,
+
+    /// xapp-… App-level token.  Required for Socket Mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_token: Option<String>,
+
+    /// Slack user IDs allowed to interact with the bot (e.g. ["U1234567"]).
+    /// Empty list = everyone in the workspace is allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_user_ids: Vec<String>,
+
+    /// Admin Slack user ID.  Only this user can run admin commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_user_id: Option<String>,
+
+    /// Per-project access: project key → list of allowed Slack user IDs.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub project_access: std::collections::HashMap<String, Vec<String>>,
 }
 
 fn default_poll_interval_ms() -> u64 {
     30_000
+}
+
+impl SlackConfig {
+    /// Returns true if the Slack bot (Socket Mode) is fully configured.
+    pub fn bot_enabled(&self) -> bool {
+        self.bot_token.is_some() && self.app_token.is_some()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +197,13 @@ pub struct AppConfig {
     /// Global Jira config is optional — users configure their own via /jira.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jira: Option<JiraConfig>,
-    pub claude: ClaudeConfig,
+    /// Which AI tool to use. Defaults to Claude for backward compatibility.
+    #[serde(default)]
+    pub ai_tool: AiTool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<ClaudeConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kiro: Option<KiroConfig>,
 
     /// Map from PROJECT_KEY → list of repo paths
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "repos")]

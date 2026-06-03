@@ -25,6 +25,8 @@ const FORWARDED_ENV_KEYS: &[&str] = &[
     "USER",
     "ANTHROPIC_API_KEY",
     "CLAUDE_CONFIG_DIR",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
 ];
 
 // ---------------------------------------------------------------------------

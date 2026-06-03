@@ -13,13 +13,14 @@ use crate::logger::Logger;
 use super::commands::{
     ask_with_session, handle_admin, handle_admin_callback, handle_admin_input, handle_ask,
     handle_ask_session_callback, handle_ask_text_input, handle_grill_answer, handle_help,
-    handle_jira, handle_jira_callback, handle_jira_input, handle_my_tickets_callback,
+    handle_jira, handle_jira_action, handle_jira_input_with_text, handle_my_tickets_callback,
     handle_pending_comment, handle_permissions_add, handle_permissions_back,
     handle_permissions_done, handle_permissions_revoke, handle_permissions_toggle,
     handle_permissions_user_input, handle_permissions_user_select, handle_post_analysis_implement,
     handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
+use super::sender::TelegramSender;
 use super::AppState;
 
 // ---------------------------------------------------------------------------
@@ -124,7 +125,16 @@ pub async fn start_polling(
                     let bot = bot_inner.clone();
                     let ids = ids.clone();
                     Box::pin(async move {
-                        crate::bot::handlers::create_slack_forward_handler(bot, ids, &new_msg).await
+                        let sender: Arc<dyn crate::channel::ChannelSender> =
+                            Arc::new(TelegramSender::new(bot));
+                        let chat_ids: Vec<String> =
+                            ids.iter().map(|id| id.to_string()).collect();
+                        crate::bot::handlers::create_slack_forward_handler(
+                            sender,
+                            chat_ids,
+                            &new_msg,
+                        )
+                        .await
                     })
                 });
 
@@ -142,6 +152,16 @@ pub async fn start_polling(
         ct_slack.cancelled().await;
         cancel_flag_clone.store(true, std::sync::atomic::Ordering::Relaxed);
     });
+
+    // Start Slack Socket Mode bot if app_token + bot_token are configured.
+    if config.slack.as_ref().map(|s| s.bot_enabled()).unwrap_or(false) {
+        let ct_socket = ct.clone();
+        let state_socket = Arc::clone(&state);
+        let logger_socket = Arc::clone(logger);
+        tokio::spawn(async move {
+            let _ = crate::slack_bot::bot::start_slack_bot(ct_socket, state_socket, &logger_socket).await;
+        });
+    }
 
     let handler = build_handler();
 
@@ -196,21 +216,25 @@ async fn dispatch_command(
     state: Arc<AppState>,
     allowed_ids: Arc<HashSet<i64>>,
 ) -> anyhow::Result<()> {
-    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let user_id_i64 = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let user_id = user_id_i64.to_string();
+    let chat_id = msg.chat.id.0.to_string();
 
     if let Some(u) = &msg.from {
-        state.user_names.insert(user_id, format_user_name(u));
+        state.user_names.insert(user_id_i64, format_user_name(u));
     }
 
     if !is_authorized(&msg, &allowed_ids, &state) {
         state.logger.warn(
             "unauthorized command attempt",
-            Some(&serde_json::json!({ "user_id": user_id, "chat_id": msg.chat.id.0 })),
+            Some(
+                &serde_json::json!({ "user_id": user_id_i64, "chat_id": msg.chat.id.0 }),
+            ),
         );
         let uname = msg.from.as_ref().map(format_user_name).unwrap_or_default();
         let raw_text = msg.text().unwrap_or("").to_string();
         state.audit_logger.log_action(
-            user_id,
+            user_id_i64,
             &uname,
             "unauthorized_command",
             "",
@@ -222,6 +246,8 @@ async fn dispatch_command(
         return Ok(());
     }
 
+    let sender: Arc<dyn crate::channel::ChannelSender> = Arc::new(TelegramSender::new(bot.clone()));
+
     let (cmd_name, cmd_args) = match &cmd {
         BotCommand::Help => ("help", String::new()),
         BotCommand::Start(a) => ("start", a.clone()),
@@ -230,15 +256,17 @@ async fn dispatch_command(
     };
     state.logger.info(
         "command received",
-        Some(&serde_json::json!({ "cmd": cmd_name, "user_id": user_id, "chat_id": msg.chat.id.0 })),
+        Some(
+            &serde_json::json!({ "cmd": cmd_name, "user_id": user_id_i64, "chat_id": msg.chat.id.0 }),
+        ),
     );
     let uname = state
         .user_names
-        .get(&user_id)
+        .get(&user_id_i64)
         .map(|n| n.clone())
         .unwrap_or_default();
     state.audit_logger.log_action(
-        user_id,
+        user_id_i64,
         &uname,
         "command",
         cmd_name,
@@ -246,10 +274,10 @@ async fn dispatch_command(
     );
 
     // Any new slash command cancels whatever the user was in the middle of.
-    clear_pending_states(&state, msg.chat.id.0);
+    clear_pending_states(&state, &chat_id);
 
     match cmd {
-        BotCommand::Help => handle_help(bot, msg, state).await,
+        BotCommand::Help => handle_help(Arc::clone(&sender), &chat_id, state).await,
         BotCommand::Start(args) => {
             let trimmed = args.trim().to_string();
             // Deep-link ticket lookup: /start PROJ-123 (Jira key pattern)
@@ -271,25 +299,41 @@ async fn dispatch_command(
                 .unwrap_or(false);
             if is_jira_key {
                 super::commands::my_tickets::handle_ticket_details(
-                    bot,
-                    msg.chat.id,
+                    Arc::clone(&sender),
+                    &chat_id,
+                    &user_id,
                     state,
-                    user_id,
                     &trimmed,
                 )
                 .await
             } else {
-                handle_ask(bot, msg, state, trimmed, user_id).await
+                let auth_fn = {
+                    let state_ref = Arc::clone(&state);
+                    move |pk: &str| is_authorized_for_project(user_id_i64, pk, &state_ref)
+                };
+                handle_ask(
+                    Arc::clone(&sender),
+                    &chat_id,
+                    state,
+                    trimmed,
+                    &user_id,
+                    auth_fn,
+                )
+                .await
             }
         }
-        BotCommand::Jira => handle_jira(bot, msg, state).await,
+        BotCommand::Jira => handle_jira(Arc::clone(&sender), &chat_id, &user_id, state).await,
         BotCommand::Admin => {
-            if !is_admin(user_id, &state) {
-                bot.send_message(msg.chat.id, "Access denied. This command is admin-only.")
+            if !is_admin(user_id_i64, &state) {
+                sender
+                    .send(
+                        &chat_id,
+                        "Access denied. This command is admin-only.",
+                    )
                     .await?;
                 return Ok(());
             }
-            handle_admin(bot, msg, state).await
+            handle_admin(Arc::clone(&sender), &chat_id, state).await
         }
     }
 }
@@ -304,16 +348,18 @@ async fn dispatch_callback(
     state: Arc<AppState>,
     allowed_ids: Arc<HashSet<i64>>,
 ) -> anyhow::Result<()> {
-    let user_id = query.from.id.0 as i64;
-    if !is_authorized_id(user_id, &allowed_ids, &state) {
+    let user_id_i64 = query.from.id.0 as i64;
+    let user_id = user_id_i64.to_string();
+
+    if !is_authorized_id(user_id_i64, &allowed_ids, &state) {
         state.logger.warn(
             "unauthorized callback attempt",
-            Some(&serde_json::json!({ "user_id": user_id })),
+            Some(&serde_json::json!({ "user_id": user_id_i64 })),
         );
         let uname = format_user_name(&query.from);
         let cb_data = query.data.as_deref().unwrap_or("").to_string();
         state.audit_logger.log_action(
-            user_id,
+            user_id_i64,
             &uname,
             "unauthorized_callback",
             "",
@@ -324,61 +370,87 @@ async fn dispatch_callback(
         return Ok(());
     }
 
+    // Extract chat_id and message_ref before answering
+    let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
+        Some(id) => id.0.to_string(),
+        None => {
+            let _ = bot.answer_callback_query(query.id).await;
+            return Ok(());
+        }
+    };
+    let msg_ref_opt = query.message.as_ref().map(|m| crate::channel::SentMessageRef {
+        chat_id: chat_id.clone(),
+        message_id: m.id().0.to_string(),
+    });
+
+    // Answer the callback query first
+    let _ = bot.answer_callback_query(query.id.clone()).await;
+
     let data = query.data.clone().unwrap_or_default();
     state.logger.debug(
         "callback received",
-        Some(&serde_json::json!({ "data": data, "user_id": user_id })),
+        Some(&serde_json::json!({ "data": data, "user_id": user_id_i64 })),
     );
     let cb_prefix = data.split(':').next().unwrap_or(&data);
     let uname = state
         .user_names
-        .get(&user_id)
+        .get(&user_id_i64)
         .map(|n| n.clone())
         .unwrap_or_else(|| format_user_name(&query.from));
     state.audit_logger.log_action(
-        user_id,
+        user_id_i64,
         &uname,
         "callback",
         cb_prefix,
         Some(serde_json::json!({ "data": data })),
     );
 
+    let sender: Arc<dyn crate::channel::ChannelSender> = Arc::new(TelegramSender::new(bot.clone()));
+
     if data.starts_with("admin:") {
-        if !is_admin(user_id, &state) {
-            let _ = bot.answer_callback_query(query.id).await;
+        if !is_admin(user_id_i64, &state) {
             return Ok(());
         }
-        return handle_admin_callback(bot, query, state).await;
+        return handle_admin_callback(Arc::clone(&sender), &chat_id, &user_id, &data, state).await;
     }
 
     if data.starts_with("jira:") {
-        return handle_jira_callback(bot, query, state).await;
+        return handle_jira_action(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            &data,
+            msg_ref_opt,
+            state,
+        )
+        .await;
     }
 
     if data.starts_with("tickets:") {
         let denied_project = if let Some(key) = data.strip_prefix("tickets:project:") {
-            (!is_authorized_for_project(user_id, key, &state)).then_some(key.to_string())
+            (!is_authorized_for_project(user_id_i64, key, &state)).then_some(key.to_string())
         } else if let Some(rest) = data.strip_prefix("tickets:status:") {
             let project_key = rest.split(':').next().unwrap_or("");
-            (!is_authorized_for_project(user_id, project_key, &state))
+            (!is_authorized_for_project(user_id_i64, project_key, &state))
                 .then_some(project_key.to_string())
         } else {
             None
         };
 
         if denied_project.is_some() {
-            if let Some(msg) = query.message.as_ref() {
-                bot.send_message(msg.chat().id, "Access denied for that project.")
-                    .await?;
-            }
+            sender
+                .send(&chat_id, "Access denied for that project.")
+                .await?;
             return Ok(());
         }
 
-        return handle_my_tickets_callback(bot, query, state).await;
+        return handle_my_tickets_callback(Arc::clone(&sender), &chat_id, &user_id, &data, state)
+            .await;
     }
 
     if data.starts_with("solve:repo:") {
-        return handle_solve_repo_callback(bot, query, state).await;
+        return handle_solve_repo_callback(Arc::clone(&sender), &chat_id, &user_id, state, &data)
+            .await;
     }
 
     if data.starts_with("solve:branch:") {
@@ -386,13 +458,13 @@ async fn dispatch_callback(
         if parts.len() == 4 {
             let choice = parts[2].to_string();
             let issue_key = parts[3].to_string();
-            let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-                Some(id) => id,
-                None => return Ok(()),
-            };
-            let _ = bot.answer_callback_query(query.id.clone()).await;
             return super::commands::solve::handle_branch_choice(
-                bot, chat_id, state, user_id, &choice, &issue_key,
+                Arc::clone(&sender),
+                &chat_id,
+                state,
+                &user_id,
+                &choice,
+                &issue_key,
             )
             .await;
         }
@@ -401,12 +473,14 @@ async fn dispatch_callback(
 
     if let Some(issue_key) = data.strip_prefix("solve:post:implement:") {
         let issue_key = issue_key.to_string();
-        let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-            Some(id) => id,
-            None => return Ok(()),
-        };
-        let _ = bot.answer_callback_query(query.id.clone()).await;
-        return handle_post_analysis_implement(bot, chat_id, state, user_id, &issue_key).await;
+        return handle_post_analysis_implement(
+            Arc::clone(&sender),
+            &chat_id,
+            state,
+            &user_id,
+            &issue_key,
+        )
+        .await;
     }
 
     if data.starts_with("solve:action:") {
@@ -414,53 +488,84 @@ async fn dispatch_callback(
         if parts.len() == 4 {
             let action = parts[2].to_string();
             let issue_key = parts[3].to_string();
-            let chat_id = match query.message.as_ref().map(|m| m.chat().id) {
-                Some(id) => id,
-                None => return Ok(()),
-            };
-            let _ = bot.answer_callback_query(query.id.clone()).await;
-            return handle_solve_action_callback(bot, chat_id, state, user_id, &action, &issue_key)
-                .await;
+            return handle_solve_action_callback(
+                Arc::clone(&sender),
+                &chat_id,
+                state,
+                &user_id,
+                &action,
+                &issue_key,
+            )
+            .await;
         }
         return Ok(());
     }
 
     if data.starts_with("ask:") {
-        return handle_ask_session_callback(bot, query, state).await;
+        let auth_fn = {
+            let state_ref = Arc::clone(&state);
+            move |pk: &str| is_authorized_for_project(user_id_i64, pk, &state_ref)
+        };
+        return handle_ask_session_callback(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            &data,
+            state,
+            auth_fn,
+        )
+        .await;
     }
 
     if data.starts_with("slack:") {
-        return handle_slack_callback(bot, query, state).await;
+        return handle_slack_callback(Arc::clone(&sender), &chat_id, &data, state).await;
     }
 
     if data.starts_with("perms:") {
         if data == "perms:done" {
-            return handle_permissions_done(bot, query, state).await;
+            return handle_permissions_done(Arc::clone(&sender), &chat_id, state).await;
         }
         if data == "perms:back" {
-            return handle_permissions_back(bot, query, state).await;
+            return handle_permissions_back(Arc::clone(&sender), &chat_id, state, msg_ref_opt)
+                .await;
         }
         if data == "perms:add" {
-            return handle_permissions_add(bot, query, state).await;
+            return handle_permissions_add(Arc::clone(&sender), &chat_id, state).await;
         }
         if let Some(key) = data.strip_prefix("perms:toggle:") {
-            return handle_permissions_toggle(bot, query, state, key.to_string()).await;
+            return handle_permissions_toggle(
+                Arc::clone(&sender),
+                &chat_id,
+                state,
+                key.to_string(),
+            )
+            .await;
         }
         if let Some(rest) = data.strip_prefix("perms:user:") {
             if let Ok(target_id) = rest.parse::<i64>() {
-                return handle_permissions_user_select(bot, query, state, target_id).await;
+                return handle_permissions_user_select(
+                    Arc::clone(&sender),
+                    &chat_id,
+                    state,
+                    target_id,
+                )
+                .await;
             }
         }
         if let Some(rest) = data.strip_prefix("perms:revoke:") {
             if let Ok(target_id) = rest.parse::<i64>() {
-                return handle_permissions_revoke(bot, query, state, target_id).await;
+                return handle_permissions_revoke(
+                    Arc::clone(&sender),
+                    &chat_id,
+                    state,
+                    target_id,
+                )
+                .await;
             }
         }
-        let _ = bot.answer_callback_query(query.id).await;
         return Ok(());
     }
 
-    let _ = bot.answer_callback_query(query.id).await;
     Ok(())
 }
 
@@ -478,7 +583,9 @@ async fn dispatch_message(
         if let Some(u) = &msg.from {
             state.logger.warn(
                 "unauthorized message attempt",
-                Some(&serde_json::json!({ "user_id": u.id.0, "chat_id": msg.chat.id.0 })),
+                Some(
+                    &serde_json::json!({ "user_id": u.id.0, "chat_id": msg.chat.id.0 }),
+                ),
             );
             let uname = format_user_name(u);
             let preview = truncate_for_audit(msg.text().unwrap_or(""));
@@ -494,13 +601,13 @@ async fn dispatch_message(
         return Ok(());
     }
 
-    if let Some(u) = &msg.from {
-        let uid = u.id.0 as i64;
-        state.user_names.insert(uid, format_user_name(u));
-    }
+    let user_id_i64 = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let user_id = user_id_i64.to_string();
+    let chat_id = msg.chat.id.0.to_string();
 
-    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
-    let chat_id = msg.chat.id.0;
+    if let Some(u) = &msg.from {
+        state.user_names.insert(user_id_i64, format_user_name(u));
+    }
 
     let msg_context = {
         let s = state.chat_states.get(&chat_id);
@@ -567,17 +674,19 @@ async fn dispatch_message(
     };
     let uname = state
         .user_names
-        .get(&user_id)
+        .get(&user_id_i64)
         .map(|n| n.clone())
         .unwrap_or_default();
     let text_preview = truncate_for_audit(msg.text().unwrap_or(""));
     state.audit_logger.log_action(
-        user_id,
+        user_id_i64,
         &uname,
         "message",
         msg_context,
         Some(serde_json::json!({ "text": text_preview })),
     );
+
+    let sender: Arc<dyn crate::channel::ChannelSender> = Arc::new(TelegramSender::new(bot.clone()));
 
     // Check pending admin panel input (clone / add_project)
     let pending_admin = state
@@ -586,7 +695,16 @@ async fn dispatch_message(
         .and_then(|s| s.pending_admin_action.clone());
 
     if let Some(action) = pending_admin {
-        return handle_admin_input(bot, msg, state, action).await;
+        let text = msg.text().unwrap_or("").to_string();
+        return handle_admin_input(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            &text,
+            state,
+            action,
+        )
+        .await;
     }
 
     // Check pending Jira panel input
@@ -596,11 +714,21 @@ async fn dispatch_message(
         .and_then(|s| s.pending_jira_action.clone());
 
     if let Some(action) = pending_jira {
+        let text = msg.text().unwrap_or("").trim().to_string();
         let auth_check = {
             let state_ref = Arc::clone(&state);
-            move |pk: &str| is_authorized_for_project(user_id, pk, &state_ref)
+            move |pk: &str| is_authorized_for_project(user_id_i64, pk, &state_ref)
         };
-        return handle_jira_input(bot, msg, state, user_id, action, auth_check).await;
+        return handle_jira_input_with_text(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            action,
+            auth_check,
+            state,
+            text,
+        )
+        .await;
     }
 
     // Check pending permissions: waiting for admin to type a target user ID.
@@ -616,7 +744,14 @@ async fn dispatch_message(
         .unwrap_or(false);
 
     if waiting_for_user_id {
-        return handle_permissions_user_input(bot, msg, state).await;
+        let text = msg.text().unwrap_or("").trim().to_string();
+        return handle_permissions_user_input(
+            Arc::clone(&sender),
+            &chat_id,
+            &text,
+            state,
+        )
+        .await;
     }
 
     // Check pending comment
@@ -626,7 +761,16 @@ async fn dispatch_message(
         .and_then(|s| s.pending_comment.clone());
 
     if let Some((issue_key,)) = pending_comment {
-        return handle_pending_comment(bot, msg, state, issue_key).await;
+        let text = msg.text().unwrap_or("").to_string();
+        return handle_pending_comment(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            &text,
+            state,
+            issue_key,
+        )
+        .await;
     }
 
     // Check pending solve branch name confirmation
@@ -642,7 +786,15 @@ async fn dispatch_message(
         .unwrap_or(false);
 
     if awaiting_branch_name {
-        return handle_solve_branch_name_input(bot, msg, state, user_id).await;
+        let branch_name = msg.text().unwrap_or("").trim().to_string();
+        return handle_solve_branch_name_input(
+            Arc::clone(&sender),
+            &chat_id,
+            state,
+            &user_id,
+            branch_name,
+        )
+        .await;
     }
 
     // Check active grill session
@@ -653,7 +805,8 @@ async fn dispatch_message(
         .unwrap_or(false);
 
     if has_pending_grill {
-        return handle_grill_answer(bot, msg, state, user_id).await;
+        let answer = msg.text().unwrap_or("").trim().to_string();
+        return handle_grill_answer(Arc::clone(&sender), &chat_id, &user_id, state, answer).await;
     }
 
     // Check pending ask
@@ -664,7 +817,15 @@ async fn dispatch_message(
         .unwrap_or(false);
 
     if has_pending_ask {
-        return handle_ask_text_input(bot, msg, state).await;
+        let text = msg.text().unwrap_or("").trim().to_string();
+        return handle_ask_text_input(
+            Arc::clone(&sender),
+            &chat_id,
+            &user_id,
+            text,
+            state,
+        )
+        .await;
     }
 
     // Check pending Slack reply
@@ -675,7 +836,14 @@ async fn dispatch_message(
         .unwrap_or(false);
 
     if has_pending_slack {
-        return handle_pending_slack_reply(bot, msg, state).await;
+        let text = msg.text().unwrap_or("").trim().to_string();
+        return handle_pending_slack_reply(
+            Arc::clone(&sender),
+            &chat_id,
+            &text,
+            state,
+        )
+        .await;
     }
 
     let text = msg.text().unwrap_or("").trim().to_string();
@@ -684,12 +852,13 @@ async fn dispatch_message(
     }
 
     if text.starts_with('/') {
-        bot.send_message(msg.chat.id, "Unknown command. Try /help")
+        sender
+            .send(&chat_id, "Unknown command. Try /help")
             .await?;
         return Ok(());
     }
 
-    ask_with_session(bot, msg.chat.id, state, text).await?;
+    ask_with_session(Arc::clone(&sender), &chat_id, state, text).await?;
 
     Ok(())
 }
@@ -755,13 +924,13 @@ async fn notify_admin_unauthorized(
 fn truncate_for_audit(text: &str) -> String {
     let mut s: String = text.chars().take(300).collect();
     if text.chars().count() > 300 {
-        s.push('…');
+        s.push('\u{2026}');
     }
     s
 }
 
-fn clear_pending_states(state: &Arc<AppState>, chat_id: i64) {
-    if let Some(mut cs) = state.chat_states.get_mut(&chat_id) {
+fn clear_pending_states(state: &Arc<AppState>, chat_id: &str) {
+    if let Some(mut cs) = state.chat_states.get_mut(chat_id) {
         cs.pending_comment = None;
         cs.pending_ask = None;
         cs.pending_jira_action = None;
