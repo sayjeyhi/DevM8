@@ -42,8 +42,9 @@ impl TeamsSender {
                 "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
                 tid
             ),
-            None => "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
-                .to_string(),
+            None => {
+                "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token".to_string()
+            }
         };
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -148,12 +149,7 @@ impl TeamsSender {
             activity_id
         );
         let token = self.get_token().await?;
-        let _ = self
-            .client
-            .delete(&url)
-            .bearer_auth(&token)
-            .send()
-            .await;
+        let _ = self.client.delete(&url).bearer_auth(&token).send().await;
         Ok(())
     }
 

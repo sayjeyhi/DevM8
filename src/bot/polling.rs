@@ -471,7 +471,9 @@ async fn dispatch_callback(
             }
         };
         if !cancelled {
-            sender.send(&chat_id, "No active request to cancel.").await?;
+            sender
+                .send(&chat_id, "No active request to cancel.")
+                .await?;
         }
         return Ok(());
     }

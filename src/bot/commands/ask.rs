@@ -368,7 +368,9 @@ pub async fn ask_with_session(
     };
 
     // Edit the status message away (also removes the cancel button)
-    sender.edit_with_keyboard(&status_ref, "Done.", vec![]).await?;
+    sender
+        .edit_with_keyboard(&status_ref, "Done.", vec![])
+        .await?;
 
     // Send response in chunks
     sender.send_in_chunks(chat_id, &answer).await?;
@@ -863,7 +865,10 @@ pub async fn handle_ask_session_callback(
 
         let Some(repo_path) = repo_path else {
             sender
-                .send(chat_id, "\u{26a0}\u{fe0f} No project directory linked to this session.")
+                .send(
+                    chat_id,
+                    "\u{26a0}\u{fe0f} No project directory linked to this session.",
+                )
                 .await?;
             return Ok(());
         };
@@ -899,8 +904,7 @@ pub async fn handle_ask_session_callback(
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let output =
-            tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await;
+        let output = tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await;
 
         sender.delete_message(&status_ref).await;
 
@@ -1407,7 +1411,10 @@ pub async fn handle_ask_session_callback(
 
             let Some(path) = repo_path else {
                 sender
-                    .send(chat_id, "\u{26a0}\u{fe0f} No project directory linked to this session.")
+                    .send(
+                        chat_id,
+                        "\u{26a0}\u{fe0f} No project directory linked to this session.",
+                    )
                     .await?;
                 return Ok(());
             };
@@ -1416,7 +1423,10 @@ pub async fn handle_ask_session_callback(
             match tokio::fs::read_to_string(&pkg_path).await {
                 Err(_) => {
                     sender
-                        .send(chat_id, "No <code>package.json</code> found in this project.")
+                        .send(
+                            chat_id,
+                            "No <code>package.json</code> found in this project.",
+                        )
                         .await?;
                 }
                 Ok(content) => {

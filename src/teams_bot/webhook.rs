@@ -1,12 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -53,10 +47,7 @@ pub async fn run_webhook(
 
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
-    logger.info(
-        "teams webhook listening",
-        Some(&json!({ "addr": addr })),
-    );
+    logger.info("teams webhook listening", Some(&json!({ "addr": addr })));
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { ct.cancelled().await })
@@ -144,15 +135,7 @@ async fn dispatch_message(ws: WebhookState, activity: TeamsActivity) {
         return;
     }
 
-    dispatch_text(
-        &ws.app_state,
-        sender,
-        &chat_id,
-        &user_id,
-        &text,
-        &ws.logger,
-    )
-    .await;
+    dispatch_text(&ws.app_state, sender, &chat_id, &user_id, &text, &ws.logger).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,15 +164,8 @@ async fn dispatch_text(
 
         match cmd {
             "/ask" | "/start" => {
-                dispatch_ask_command(
-                    Arc::clone(state),
-                    sender,
-                    chat_id,
-                    user_id,
-                    args,
-                    logger,
-                )
-                .await;
+                dispatch_ask_command(Arc::clone(state), sender, chat_id, user_id, args, logger)
+                    .await;
             }
             "/jira" => {
                 dispatch_jira_command(Arc::clone(state), sender, chat_id, user_id, logger).await;
@@ -199,7 +175,9 @@ async fn dispatch_text(
             }
             "/admin" => {
                 if !state.teams_is_admin(user_id) {
-                    let _ = sender.send(chat_id, "Access denied. This command is admin-only.").await;
+                    let _ = sender
+                        .send(chat_id, "Access denied. This command is admin-only.")
+                        .await;
                     return;
                 }
                 dispatch_admin_command(Arc::clone(state), sender, chat_id, logger).await;
@@ -361,19 +339,11 @@ async fn dispatch_action(
                     .await;
                 return;
             }
-            dispatch_jira_action(Arc::clone(state), sender, chat_id, user_id, action, logger)
-                .await;
+            dispatch_jira_action(Arc::clone(state), sender, chat_id, user_id, action, logger).await;
         }
         "tickets" => {
-            dispatch_my_tickets_action(
-                Arc::clone(state),
-                sender,
-                chat_id,
-                user_id,
-                action,
-                logger,
-            )
-            .await;
+            dispatch_my_tickets_action(Arc::clone(state), sender, chat_id, user_id, action, logger)
+                .await;
         }
         "ask" => {
             dispatch_ask_action(Arc::clone(state), sender, chat_id, user_id, action, logger).await;
@@ -383,10 +353,7 @@ async fn dispatch_action(
                 .await;
         }
         other => {
-            logger.debug(
-                &format!("teams: unhandled action prefix: {other}"),
-                None,
-            );
+            logger.debug(&format!("teams: unhandled action prefix: {other}"), None);
         }
     }
 }
@@ -520,8 +487,8 @@ async fn dispatch_solve_action(
     }
 
     if action.starts_with("solve:repo:") {
-        let _ = handle_solve_repo_callback(Arc::clone(&sender), chat_id, user_id, state, action)
-            .await;
+        let _ =
+            handle_solve_repo_callback(Arc::clone(&sender), chat_id, user_id, state, action).await;
         return;
     }
     if let Some(issue_key) = action.strip_prefix("solve:post:implement:") {
@@ -621,8 +588,7 @@ async fn dispatch_solve_branch_name_input(
     text: &str,
     _logger: &Arc<dyn Logger>,
 ) {
-    let _ =
-        handle_solve_branch_name_input(sender, chat_id, state, user_id, text.to_string()).await;
+    let _ = handle_solve_branch_name_input(sender, chat_id, state, user_id, text.to_string()).await;
 }
 
 async fn dispatch_grill_answer(
