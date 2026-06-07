@@ -158,10 +158,26 @@ impl GitClient {
         Ok(())
     }
 
-    /// Pull the current branch from the given remote.
+    /// Fetch a branch from the given remote.
+    pub async fn fetch(&self, remote: &str, branch: &str) -> Result<()> {
+        let _ = self.exec(&["fetch", remote, branch]).await?;
+        Ok(())
+    }
+
+    /// Pull using the configured upstream tracking branch.
+    /// Falls back to `git pull <remote> <current-branch>` if no upstream is set.
     pub async fn pull(&self, remote: &str) -> Result<String> {
-        let branch = self.current_branch().await?;
-        self.run(&["pull", remote, &branch]).await
+        let has_upstream = self
+            .exec(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+            .await
+            .map(|o| o.exit_code == 0)
+            .unwrap_or(false);
+        if has_upstream {
+            self.run(&["pull"]).await
+        } else {
+            let branch = self.current_branch().await?;
+            self.run(&["pull", remote, &branch]).await
+        }
     }
 
     /// Push the current branch and set the upstream.
@@ -225,6 +241,10 @@ impl GitClient {
         let path_str = path.to_string_lossy().into_owned();
         self.run(&["worktree", "add", &path_str, "-b", &branch, "origin/main"])
             .await?;
+        // Set tracking so commits_behind/ahead and plain `git pull` work correctly.
+        let _ = self
+            .exec(&["branch", "--set-upstream-to", "origin/main", &branch])
+            .await;
         Ok(path)
     }
 

@@ -58,6 +58,7 @@ async fn send_repo_ready_message(
     repo_name: &str,
     git: &Arc<crate::git::GitClient>,
 ) -> Result<()> {
+    let _ = git.fetch("origin", "main").await;
     let (branch, clean, behind) =
         tokio::join!(git.current_branch(), git.is_clean(), git.commits_behind(),);
     let branch = branch.unwrap_or_else(|_| "unknown".into());
@@ -104,6 +105,7 @@ async fn session_keyboard(
     git: Option<&Arc<crate::git::GitClient>>,
 ) -> Vec<Vec<Button>> {
     let (commit_label, push_label, pull_label) = if let Some(g) = git {
+        let _ = g.fetch("origin", "main").await;
         let (changed, ahead, behind) = tokio::join!(
             g.changed_files_count(),
             g.commits_ahead(),
