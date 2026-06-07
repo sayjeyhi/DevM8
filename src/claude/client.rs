@@ -103,6 +103,18 @@ fn bind_home_subtree(cmd: &mut Command, path_str: &str) {
     }
 }
 
+/// Run `which <tool>` on the host and return the resolved path string, or None.
+#[cfg(target_os = "linux")]
+fn resolve_which(tool: &str) -> Option<String> {
+    std::process::Command::new("which")
+        .arg(tool)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 pub struct ClaudeClient {
     config: ClaudeClientConfig,
     logger: Arc<dyn Logger>,
@@ -143,6 +155,10 @@ impl ClaudeClient {
         cmd.args(["--tmpfs", "/root"]);
 
         cmd.args(["--dir", "/home/sandbox"]);
+
+        // Extra PATH entries discovered from host tool locations (under /home).
+        let mut extra_paths: Vec<String> = Vec::new();
+
         if let Ok(host_home) = std::env::var("HOME") {
             let claude_dir = format!("{host_home}/.claude");
             if std::path::Path::new(&claude_dir).exists() {
@@ -160,6 +176,50 @@ impl ClaudeClient {
                 cmd.args(["--dir", "/home/sandbox/.config"]);
                 cmd.args(["--ro-bind", &gh_config, "/home/sandbox/.config/gh"]);
             }
+
+            // nvm — bind the entire ~/.nvm tree so nvm.sh and all installed node
+            // versions remain accessible.  The shell command can source nvm.sh and
+            // call `nvm use <version>` to activate the right node.
+            let nvm_dir = format!("{host_home}/.nvm");
+            if std::path::Path::new(&nvm_dir).exists() {
+                cmd.args(["--ro-bind", &nvm_dir, "/home/sandbox/.nvm"]);
+                cmd.args(["--setenv", "NVM_DIR", "/home/sandbox/.nvm"]);
+            }
+
+            // pnpm standalone install — typically at ~/.local/share/pnpm
+            let pnpm_home = format!("{host_home}/.local/share/pnpm");
+            if std::path::Path::new(&pnpm_home).exists() {
+                cmd.args(["--dir", "/home/sandbox/.local"]);
+                cmd.args(["--dir", "/home/sandbox/.local/share"]);
+                cmd.args(["--ro-bind", &pnpm_home, "/home/sandbox/.local/share/pnpm"]);
+                extra_paths.push("/home/sandbox/.local/share/pnpm".to_string());
+                cmd.args(["--setenv", "PNPM_HOME", "/home/sandbox/.local/share/pnpm"]);
+            }
+
+            // yarn — bind ~/.yarn so classic yarn and berry are accessible
+            let yarn_dir = format!("{host_home}/.yarn");
+            if std::path::Path::new(&yarn_dir).exists() {
+                cmd.args(["--ro-bind", &yarn_dir, "/home/sandbox/.yarn"]);
+                let yarn_bin = "/home/sandbox/.yarn/bin";
+                extra_paths.push(yarn_bin.to_string());
+            }
+
+            // Any tool (node, npm, pnpm, yarn, nvm) that resolves to a path
+            // under /home (e.g. installed via a per-user package manager) needs
+            // its parent dotdir bound.  bind_home_subtree handles the lookup.
+            for tool in &["node", "npm", "pnpm", "yarn"] {
+                if let Some(path) = resolve_which(tool) {
+                    bind_home_subtree(&mut cmd, &path);
+                    if let Some(dir) = std::path::Path::new(&path)
+                        .parent()
+                        .map(|p| p.to_string_lossy().into_owned())
+                    {
+                        if !extra_paths.contains(&dir) {
+                            extra_paths.push(dir);
+                        }
+                    }
+                }
+            }
         }
 
         let inner_cwd = if let Some(cwd) = cwd {
@@ -174,7 +234,12 @@ impl ClaudeClient {
         cmd.arg("--clearenv");
         cmd.args(["--setenv", "HOME", "/home/sandbox"]);
         cmd.args(["--setenv", "TMPDIR", "/tmp"]);
-        let bwrap_path = bwrap_path_with_gh();
+        let mut bwrap_path = bwrap_path_with_gh();
+        for extra in &extra_paths {
+            if !bwrap_path.split(':').any(|s| s == extra.as_str()) {
+                bwrap_path = format!("{extra}:{bwrap_path}");
+            }
+        }
         cmd.args(["--setenv", "PATH", &bwrap_path]);
 
         let api_key = self

@@ -12,6 +12,76 @@ use crate::claude::types::AskOptions;
 use crate::shared::errors::{AppError, ClaudeError};
 
 // ---------------------------------------------------------------------------
+// Package manager / node version helpers
+// ---------------------------------------------------------------------------
+
+fn detect_package_manager(repo: &std::path::Path) -> &'static str {
+    if repo.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if repo.join("yarn.lock").exists() {
+        "yarn"
+    } else {
+        "npm"
+    }
+}
+
+/// Read node version from .nvmrc or package.json engines.node.
+/// Returns a value suitable for passing to `nvm use`.
+fn detect_node_version(repo: &std::path::Path) -> Option<String> {
+    if let Ok(content) = std::fs::read_to_string(repo.join(".nvmrc")) {
+        let v = content.trim().to_string();
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    if let Ok(content) = std::fs::read_to_string(repo.join("package.json")) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(spec) = val
+                .get("engines")
+                .and_then(|e| e.get("node"))
+                .and_then(|n| n.as_str())
+            {
+                // Strip leading operators (>=, ^, ~, =) and take the major.minor.patch part.
+                let version: String = spec
+                    .trim_start_matches(|c: char| !c.is_ascii_digit())
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
+                if !version.is_empty() {
+                    return Some(version);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build a shell command string that:
+///  1. Sources nvm (if NVM_DIR is set or ~/.nvm exists) so node/npm are in PATH.
+///  2. Activates the requested node version when one is specified.
+///  3. Prepends common standalone pnpm / yarn bin locations.
+///  4. Runs `<pm> run <script>`.
+fn build_script_shell_cmd(pm: &str, script: &str, node_version: Option<&str>) -> String {
+    let mut parts: Vec<String> = vec![
+        // Source nvm — NVM_DIR is set by bwrap --setenv on Linux; falls back to ~/.nvm on macOS.
+        r#"export NVM_DIR="${NVM_DIR:-$HOME/.nvm}""#.to_string(),
+        r#"[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null"#.to_string(),
+    ];
+    if let Some(v) = node_version {
+        parts.push(format!(
+            r#"nvm use "{v}" 2>/dev/null || nvm install "{v}" 2>/dev/null || true"#
+        ));
+    }
+    // Prepend common standalone pnpm / yarn paths (no-op if already in PATH).
+    parts.push(
+        r#"export PATH="$HOME/.local/share/pnpm:$HOME/.yarn/bin:$HOME/Library/pnpm:$PATH""#
+            .to_string(),
+    );
+    parts.push(format!("{pm} run {script}"));
+    parts.join("; ")
+}
+
+// ---------------------------------------------------------------------------
 // Prompt builder
 // ---------------------------------------------------------------------------
 
@@ -89,6 +159,12 @@ async fn send_repo_ready_message(
             "ask:stash_only",
         )]);
     }
+    if git.repo_path.join("package.json").exists() {
+        rows.push(vec![Button::new(
+            "\u{1f4dc} Project scripts",
+            "ask:scripts",
+        )]);
+    }
     rows.push(vec![Button::new("\u{1f4bb} CLI", "ask:cli")]);
 
     sender.send_with_keyboard(chat_id, &text, rows).await?;
@@ -139,6 +215,15 @@ async fn session_keyboard(
         ],
         vec![Button::new("\u{1f51a} End session", "ask:end")],
     ];
+
+    if let Some(g) = git {
+        if g.repo_path.join("package.json").exists() {
+            rows.push(vec![Button::new(
+                "\u{1f4dc} Project scripts",
+                "ask:scripts",
+            )]);
+        }
+    }
 
     if pushed {
         rows.push(vec![Button::new("\u{1f500} Open PR", "ask:openpr")]);
@@ -764,6 +849,110 @@ pub async fn handle_ask_session_callback(
         return Ok(());
     }
 
+    // ask:script:<name> — run a package.json script directly.
+    if let Some(script_name) = action_data.strip_prefix("ask:script:") {
+        let script_name = script_name.to_string();
+        let (repo_path, git) = {
+            let cs = state.chat_states.get(chat_id);
+            let repo_path = cs
+                .as_ref()
+                .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.repo_path.clone()));
+            let git = cs.and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
+            (repo_path, git)
+        };
+
+        let Some(repo_path) = repo_path else {
+            sender
+                .send(chat_id, "\u{26a0}\u{fe0f} No project directory linked to this session.")
+                .await?;
+            return Ok(());
+        };
+
+        let cwd = repo_path.to_string_lossy().to_string();
+
+        let pm = detect_package_manager(&repo_path);
+        let node_version = detect_node_version(&repo_path);
+        let cmd_display = format!("{pm} run {script_name}");
+
+        state.logger.info(
+            "ask: running project script",
+            Some(&json!({
+                "script": &script_name,
+                "pm": pm,
+                "node_version": node_version.as_deref().unwrap_or("default"),
+                "cwd": &cwd,
+            })),
+        );
+
+        let status_ref = sender
+            .send(
+                chat_id,
+                &format!(
+                    "Running: <code>{}</code>\u{2026}",
+                    sender.escape(&cmd_display)
+                ),
+            )
+            .await?;
+
+        let cmd_str = build_script_shell_cmd(pm, &script_name, node_version.as_deref());
+        let mut cmd = state.ai.sandboxed_sh_command(Some(&cwd), &cmd_str);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let output =
+            tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await;
+
+        sender.delete_message(&status_ref).await;
+
+        let reply = match output {
+            Err(_) => format!(
+                "<b>$</b> <code>{}</code>\n\u{23f1}\u{fe0f} Timed out after 120 seconds.",
+                sender.escape(&cmd_display)
+            ),
+            Ok(Err(e)) => format!("Failed to spawn: {e}"),
+            Ok(Ok(o)) => {
+                let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                let exit_code = o.status.code().unwrap_or(-1);
+                let mut parts = vec![format!(
+                    "<b>$</b> <code>{}</code>  (exit {})",
+                    sender.escape(&cmd_display),
+                    exit_code
+                )];
+                if !stdout.trim().is_empty() {
+                    parts.push(format!("<pre>{}</pre>", sender.escape(stdout.trim())));
+                }
+                if !stderr.trim().is_empty() {
+                    parts.push(format!(
+                        "<b>stderr:</b>\n<pre>{}</pre>",
+                        sender.escape(stderr.trim())
+                    ));
+                }
+                if stdout.trim().is_empty() && stderr.trim().is_empty() {
+                    parts.push("(no output)".to_string());
+                }
+                parts.join("\n")
+            }
+        };
+
+        sender.send_in_chunks(chat_id, &reply).await?;
+
+        let pushed = state
+            .chat_states
+            .get(chat_id)
+            .and_then(|cs| cs.ask_session.as_ref().map(|s| s.pushed))
+            .unwrap_or(false);
+        sender
+            .send_with_keyboard(
+                chat_id,
+                "What would you like to do next?",
+                session_keyboard(pushed, git.as_ref()).await,
+            )
+            .await?;
+
+        return Ok(());
+    }
+
     let action = action_data.trim_start_matches("ask:");
 
     match action {
@@ -1208,6 +1397,91 @@ pub async fn handle_ask_session_callback(
                     .send(chat_id, "\u{26a0}\u{fe0f} Cannot open PR \u{2014} this session has no linked git repository.")
                     .await?;
             }
+        }
+
+        "scripts" => {
+            let repo_path = state
+                .chat_states
+                .get(chat_id)
+                .and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.repo_path.clone()));
+
+            let Some(path) = repo_path else {
+                sender
+                    .send(chat_id, "\u{26a0}\u{fe0f} No project directory linked to this session.")
+                    .await?;
+                return Ok(());
+            };
+
+            let pkg_path = path.join("package.json");
+            match tokio::fs::read_to_string(&pkg_path).await {
+                Err(_) => {
+                    sender
+                        .send(chat_id, "No <code>package.json</code> found in this project.")
+                        .await?;
+                }
+                Ok(content) => {
+                    let scripts: Vec<String> = serde_json::from_str::<serde_json::Value>(&content)
+                        .ok()
+                        .and_then(|v| v.get("scripts").and_then(|s| s.as_object()).cloned())
+                        .map(|map| map.keys().cloned().collect())
+                        .unwrap_or_default();
+
+                    if scripts.is_empty() {
+                        sender
+                            .send(chat_id, "No scripts found in <code>package.json</code>.")
+                            .await?;
+                    } else {
+                        // Telegram callback_data limit is 64 bytes; skip names that exceed it.
+                        let valid: Vec<&str> = scripts
+                            .iter()
+                            .filter(|n| format!("ask:script:{n}").len() <= 64)
+                            .map(|n| n.as_str())
+                            .collect();
+
+                        let mut rows: Vec<Vec<Button>> = valid
+                            .chunks(2)
+                            .map(|chunk| {
+                                chunk
+                                    .iter()
+                                    .map(|name| {
+                                        Button::new(
+                                            format!("\u{25b6}\u{fe0f} {}", name),
+                                            format!("ask:script:{}", name),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                        rows.push(vec![Button::new(
+                            "\u{21a9}\u{fe0f} Back",
+                            "ask:scripts_back",
+                        )]);
+
+                        sender
+                            .send_with_keyboard(chat_id, "Select a script to run:", rows)
+                            .await?;
+                    }
+                }
+            }
+        }
+
+        "scripts_back" => {
+            let (pushed, git) = {
+                let cs = state.chat_states.get(chat_id);
+                let pushed = cs
+                    .as_ref()
+                    .and_then(|cs| cs.ask_session.as_ref().map(|s| s.pushed))
+                    .unwrap_or(false);
+                let git = cs.and_then(|cs| cs.ask_session.as_ref().and_then(|s| s.git.clone()));
+                (pushed, git)
+            };
+            sender
+                .send_with_keyboard(
+                    chat_id,
+                    "What would you like to do next?",
+                    session_keyboard(pushed, git.as_ref()).await,
+                )
+                .await?;
         }
 
         _ => {}
