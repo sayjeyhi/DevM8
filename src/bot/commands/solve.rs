@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::bot::state::{
     AskSession, ChatState, PendingGrill, PendingPostAnalysis, PendingSolve, PendingSolveAction,
@@ -9,6 +10,7 @@ use crate::bot::state::{
 use crate::bot::AppState;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
+use crate::shared::errors::{AppError, ClaudeError};
 
 const GRILL_FIRST_Q_PROMPT: &str = "\
 You are a senior software engineer stress-testing a ticket before implementation.
@@ -66,13 +68,15 @@ pub async fn solve_by_key(
         Some(&json!({ "key": issue_key, "cwd": cwd.as_deref().unwrap_or("(none)") })),
     );
 
+    let cancel_kb = vec![vec![Button::new("Cancel", "solve:cancel")]];
     let status_ref = sender
-        .send(
+        .send_with_keyboard(
             chat_id,
             &format!(
                 "Analyzing <b>{}</b> with Claude...",
                 sender.escape(issue_key)
             ),
+            cancel_kb.clone(),
         )
         .await?;
     let typing = sender.start_typing(chat_id);
@@ -80,9 +84,10 @@ pub async fn solve_by_key(
     let Some(jira) = state.jira_for_user(user_id) else {
         typing.abort();
         sender
-            .edit_text(
+            .edit_with_keyboard(
                 &status_ref,
                 "Please set up your Jira account first. Use /jira \u{2192} My Jira.",
+                vec![],
             )
             .await?;
         return Ok(());
@@ -96,9 +101,10 @@ pub async fn solve_by_key(
                 Some(&json!({ "key": issue_key })),
             );
             sender
-                .edit_text(
+                .edit_with_keyboard(
                     &status_ref,
                     &format!("Could not fetch <b>{}</b>: {}", sender.escape(issue_key), e),
+                    vec![],
                 )
                 .await?;
             return Ok(());
@@ -116,6 +122,12 @@ pub async fn solve_by_key(
         .replace("{status}", &issue.status)
         .replace("{description}", &issue.description);
 
+    let ct = CancellationToken::new();
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.cancel_token = Some(ct.clone());
+    }
+
     let sender_cb = Arc::clone(&sender);
     let status_ref_cb = status_ref.clone();
     let key_progress = issue_key.to_string();
@@ -125,6 +137,7 @@ pub async fn solve_by_key(
             let sender = Arc::clone(&sender_cb);
             let sref = status_ref_cb.clone();
             let key = key_progress.clone();
+            let kb = vec![vec![Button::new("Cancel", "solve:cancel")]];
             let preview = lines.join("").chars().take(200).collect::<String>();
             Box::pin(async move {
                 let text = if preview.is_empty() {
@@ -136,34 +149,50 @@ pub async fn solve_by_key(
                         sender.escape(&preview)
                     )
                 };
-                let _ = sender.edit_text(&sref, &text).await;
+                let _ = sender.edit_with_keyboard(&sref, &text, kb).await;
             })
         });
 
     let opts = AskOptions {
         on_progress: Some(on_progress),
         cwd,
+        cancel_token: Some(ct),
         ..AskOptions::default()
     };
 
-    let analysis = match state.ai.ask(&prompt, opts).await {
+    let ask_result = state.ai.ask(&prompt, opts).await;
+    typing.abort();
+
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.cancel_token = None;
+    }
+
+    let analysis = match ask_result {
         Ok((text, _)) => text,
+        Err(AppError::Claude(ClaudeError::Cancelled)) => {
+            sender
+                .edit_with_keyboard(&status_ref, "Cancelled.", vec![])
+                .await?;
+            return Ok(());
+        }
         Err(e) => {
             state.logger.error(
                 &format!("solve: Claude error: {e}"),
                 Some(&json!({ "key": issue_key })),
             );
             sender
-                .edit_text(&status_ref, &format!("Claude error: {}", e))
+                .edit_with_keyboard(&status_ref, &format!("Claude error: {}", e), vec![])
                 .await?;
             return Ok(());
         }
     };
 
     sender
-        .edit_text(
+        .edit_with_keyboard(
             &status_ref,
             &format!("Analysis complete for <b>{}</b>", sender.escape(issue_key)),
+            vec![],
         )
         .await?;
 

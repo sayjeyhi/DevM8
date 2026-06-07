@@ -2,6 +2,8 @@
 
 use std::pin::Pin;
 
+use tokio_util::sync::CancellationToken;
+
 /// Token usage and cost from a Claude response.
 #[derive(Debug, Clone, Default)]
 pub struct UsageInfo {
@@ -66,6 +68,8 @@ pub struct AskOptions {
     pub on_progress: Option<ProgressCallback>,
     /// Working directory for the subprocess.
     pub cwd: Option<String>,
+    /// When cancelled, the running Claude subprocess is killed immediately.
+    pub cancel_token: Option<CancellationToken>,
 }
 
 impl std::fmt::Debug for AskOptions {
@@ -78,6 +82,10 @@ impl std::fmt::Debug for AskOptions {
                 &self.on_progress.as_ref().map(|_| "<callback>"),
             )
             .field("cwd", &self.cwd)
+            .field(
+                "cancel_token",
+                &self.cancel_token.as_ref().map(|_| "<token>"),
+            )
             .finish()
     }
 }

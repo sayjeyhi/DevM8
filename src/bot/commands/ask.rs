@@ -3,10 +3,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::bot::state::{AskMode, AskSession, HistoryEntry, PendingAsk, Role};
 use crate::bot::AppState;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
+use crate::shared::errors::{AppError, ClaudeError};
 
 // ---------------------------------------------------------------------------
 // Prompt builder
@@ -176,9 +179,18 @@ pub async fn ask_with_session(
         })),
     );
 
-    let status_ref = sender.send(chat_id, "Thinking...").await?;
+    let cancel_kb = vec![vec![Button::new("Cancel", "ask:cancel")]];
+    let status_ref = sender
+        .send_with_keyboard(chat_id, "Thinking...", cancel_kb.clone())
+        .await?;
 
     let typing = sender.start_typing(chat_id);
+
+    let ct = CancellationToken::new();
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.cancel_token = Some(ct.clone());
+    }
 
     let sender_cb = Arc::clone(&sender);
     let status_ref_cb = status_ref.clone();
@@ -187,13 +199,15 @@ pub async fn ask_with_session(
         Box::new(move |lines: Vec<String>| {
             let sender = Arc::clone(&sender_cb);
             let sref = status_ref_cb.clone();
+            let kb = vec![vec![Button::new("Cancel", "ask:cancel")]];
             let preview = lines.join("").chars().take(300).collect::<String>();
             Box::pin(async move {
-                if !preview.is_empty() {
-                    let _ = sender
-                        .edit_text(&sref, &format!("<pre>{}</pre>", sender.escape(&preview)))
-                        .await;
-                }
+                let text = if preview.is_empty() {
+                    "Thinking...".to_string()
+                } else {
+                    format!("<pre>{}</pre>", sender.escape(&preview))
+                };
+                let _ = sender.edit_with_keyboard(&sref, &text, kb).await;
             })
         });
 
@@ -204,21 +218,34 @@ pub async fn ask_with_session(
     let opts = AskOptions {
         on_progress: Some(on_progress),
         cwd,
+        cancel_token: Some(ct),
         ..AskOptions::default()
     };
 
-    let (answer, usage) = match state.ai.ask(&prompt, opts).await {
+    let ask_result = state.ai.ask(&prompt, opts).await;
+    typing.abort();
+
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.cancel_token = None;
+    }
+
+    let (answer, usage) = match ask_result {
         Ok(r) => r,
+        Err(AppError::Claude(ClaudeError::Cancelled)) => {
+            sender
+                .edit_with_keyboard(&status_ref, "Cancelled.", vec![])
+                .await?;
+            return Ok(());
+        }
         Err(e) => {
-            typing.abort();
             state.logger.error(&format!("ask: Claude error: {e}"), None);
             sender
-                .edit_text(&status_ref, &format!("Error: {e}"))
+                .edit_with_keyboard(&status_ref, &format!("Error: {e}"), vec![])
                 .await?;
             return Ok(());
         }
     };
-    typing.abort();
 
     state.logger.info(
         "ask: Claude responded",
@@ -253,8 +280,8 @@ pub async fn ask_with_session(
         session.pushed
     };
 
-    // Edit the status message away
-    sender.edit_text(&status_ref, "Done.").await?;
+    // Edit the status message away (also removes the cancel button)
+    sender.edit_with_keyboard(&status_ref, "Done.", vec![]).await?;
 
     // Send response in chunks
     sender.send_in_chunks(chat_id, &answer).await?;
@@ -738,6 +765,22 @@ pub async fn handle_ask_session_callback(
     let action = action_data.trim_start_matches("ask:");
 
     match action {
+        "cancel" => {
+            let cancelled = {
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+                match entry.cancel_token.take() {
+                    Some(ct) => {
+                        ct.cancel();
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if !cancelled {
+                sender.send(chat_id, "No active request to cancel.").await?;
+            }
+        }
+
         "pull_latest" => {
             let git = state
                 .chat_states

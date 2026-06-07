@@ -701,6 +701,23 @@ async fn dispatch_solve_action(
     action: &str,
     _logger: &Arc<dyn Logger>,
 ) {
+    if action == "solve:cancel" {
+        let cancelled = {
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+            match entry.cancel_token.take() {
+                Some(ct) => {
+                    ct.cancel();
+                    true
+                }
+                None => false,
+            }
+        };
+        if !cancelled {
+            let _ = sender.send(chat_id, "No active request to cancel.").await;
+        }
+        return;
+    }
+
     if action.starts_with("solve:repo:") {
         let _ =
             handle_solve_repo_callback(Arc::clone(&sender), chat_id, user_id, state, action).await;

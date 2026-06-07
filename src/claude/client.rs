@@ -10,6 +10,8 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::{interval, timeout};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::logger::Logger;
 use crate::shared::errors::{AppError, ClaudeError};
 
@@ -314,7 +316,7 @@ impl ClaudeClient {
 
         let result = timeout(
             Duration::from_millis(timeout_ms),
-            Self::stream_output(child, opts.on_progress),
+            Self::stream_output(child, opts.on_progress, opts.cancel_token),
         )
         .await;
 
@@ -369,6 +371,7 @@ impl ClaudeClient {
     async fn stream_output(
         mut child: Child,
         on_progress: Option<super::types::ProgressCallback>,
+        cancel_token: Option<CancellationToken>,
     ) -> Result<(String, i32, String, UsageInfo), AppError> {
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
@@ -408,6 +411,15 @@ impl ClaudeClient {
                     if let Some(ref cb) = on_progress {
                         cb(text_lines.clone()).await;
                     }
+                }
+                _ = async {
+                    match cancel_token.as_ref() {
+                        Some(ct) => ct.cancelled().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = child.kill().await;
+                    return Err(AppError::Claude(ClaudeError::Cancelled));
                 }
             }
         }

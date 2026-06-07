@@ -153,6 +153,9 @@ pub enum ClaudeError {
 
     #[error("Claude exited with code {exit_code}")]
     Exit { exit_code: i32, stderr: String },
+
+    #[error("Cancelled by user")]
+    Cancelled,
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::git::GitClient;
 
 // ---------------------------------------------------------------------------
@@ -252,4 +254,7 @@ pub struct ChatState {
 
     /// Waiting for user to type input for a Jira panel action
     pub pending_jira_action: Option<JiraPendingAction>,
+
+    /// Active cancellation token for an in-flight AI request; cancel() aborts it.
+    pub cancel_token: Option<CancellationToken>,
 }

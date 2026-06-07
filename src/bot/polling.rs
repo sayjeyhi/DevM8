@@ -448,6 +448,23 @@ async fn dispatch_callback(
             .await;
     }
 
+    if data == "solve:cancel" {
+        let cancelled = {
+            let mut entry = state.chat_states.entry(chat_id.clone()).or_default();
+            match entry.cancel_token.take() {
+                Some(ct) => {
+                    ct.cancel();
+                    true
+                }
+                None => false,
+            }
+        };
+        if !cancelled {
+            sender.send(&chat_id, "No active request to cancel.").await?;
+        }
+        return Ok(());
+    }
+
     if data.starts_with("solve:repo:") {
         return handle_solve_repo_callback(Arc::clone(&sender), &chat_id, &user_id, state, &data)
             .await;
