@@ -177,6 +177,36 @@ fn default_poll_interval_ms() -> u64 {
     30_000
 }
 
+fn default_teams_port() -> u16 {
+    3978
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamsConfig {
+    /// Azure Bot Registration App ID (from Azure Portal → Configuration tab).
+    pub app_id: String,
+    /// Azure Bot App Password / client secret.
+    pub app_password: String,
+    /// Azure AD Tenant ID — required for Single Tenant bots.
+    /// Find it in Azure Portal → Microsoft Entra ID → Overview → Tenant ID.
+    /// Leave unset only if you created a Multi Tenant bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    /// Local port the Teams webhook server listens on. Default: 3978.
+    #[serde(default = "default_teams_port")]
+    pub port: u16,
+    /// Teams user AAD object IDs allowed to interact with the bot.
+    /// Empty list = everyone is allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_user_ids: Vec<String>,
+    /// Admin Teams user AAD object ID. Only this user can run admin commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_user_id: Option<String>,
+    /// Per-project access: project key → list of allowed Teams user AAD object IDs.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub project_access: std::collections::HashMap<String, Vec<String>>,
+}
+
 impl SlackConfig {
     /// Returns true if the Slack bot (Socket Mode) is fully configured.
     pub fn bot_enabled(&self) -> bool {
@@ -213,6 +243,9 @@ pub struct AppConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<SlackConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teams: Option<TeamsConfig>,
 
     /// Per-user Jira credential overrides. Key is Telegram user_id as a string.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

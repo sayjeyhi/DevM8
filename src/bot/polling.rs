@@ -165,6 +165,17 @@ pub async fn start_polling(
         });
     }
 
+    // Start Teams webhook server if configured.
+    if config.teams.is_some() {
+        let ct_teams = ct.clone();
+        let state_teams = Arc::clone(&state);
+        let logger_teams = Arc::clone(logger);
+        tokio::spawn(async move {
+            let _ =
+                crate::teams_bot::bot::start_teams_bot(ct_teams, state_teams, &logger_teams).await;
+        });
+    }
+
     let handler = build_handler();
 
     let listener =

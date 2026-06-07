@@ -64,6 +64,7 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
         },
         app,
         slack,
+        teams: None,
         user_jira: std::collections::HashMap::new(),
     })
 }

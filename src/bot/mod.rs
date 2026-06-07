@@ -72,6 +72,12 @@ pub struct AppState {
 
     /// Cache of Slack user_id → display name.
     pub slack_user_names: DashMap<String, String>,
+
+    /// Teams project access map (project key → allowed Teams AAD user IDs).
+    pub teams_project_access: RwLock<HashMap<String, Vec<String>>>,
+
+    /// Cache of Teams user_id → display name.
+    pub teams_user_names: DashMap<String, String>,
 }
 
 impl AppState {
@@ -118,6 +124,45 @@ impl AppState {
             .map(|s| s.allowed_user_ids.as_slice())
             .unwrap_or_default();
         allowed.is_empty() || allowed.iter().any(|id| id == user_id)
+    }
+
+    pub fn teams_is_admin(&self, user_id: &str) -> bool {
+        match self
+            .config
+            .teams
+            .as_ref()
+            .and_then(|t| t.admin_user_id.as_deref())
+        {
+            Some(admin_id) => user_id == admin_id,
+            None => true,
+        }
+    }
+
+    pub fn teams_is_authorized(&self, user_id: &str) -> bool {
+        let allowed = self
+            .config
+            .teams
+            .as_ref()
+            .map(|t| t.allowed_user_ids.as_slice())
+            .unwrap_or_default();
+        allowed.is_empty() || allowed.iter().any(|id| id == user_id)
+    }
+
+    pub fn teams_is_authorized_for_project(&self, user_id: &str, project_key: &str) -> bool {
+        if self.teams_is_admin(user_id) {
+            return true;
+        }
+        let access = self.teams_project_access.read().unwrap();
+        if access.is_empty() {
+            return true;
+        }
+        let is_restricted = access
+            .values()
+            .any(|ids| ids.iter().any(|id| id == user_id));
+        match access.get(project_key) {
+            None => !is_restricted,
+            Some(ids) => ids.iter().any(|id| id == user_id),
+        }
     }
 
     pub fn slack_is_authorized_for_project(&self, user_id: &str, project_key: &str) -> bool {
@@ -297,6 +342,13 @@ impl AppState {
             .map(|sc| Arc::new(SlackClient::new(sc.user_token.clone())));
 
         let project_access = RwLock::new(config.telegram.project_access.clone());
+        let teams_project_access = RwLock::new(
+            config
+                .teams
+                .as_ref()
+                .map(|t| t.project_access.clone())
+                .unwrap_or_default(),
+        );
 
         let audit_logger = Arc::new(AuditLogger::new(&PATHS.audit_log_file));
 
@@ -315,6 +367,8 @@ impl AppState {
             user_names: DashMap::new(),
             slack_project_access: RwLock::new(HashMap::new()),
             slack_user_names: DashMap::new(),
+            teams_project_access,
+            teams_user_names: DashMap::new(),
         })
     }
 }

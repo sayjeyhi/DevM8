@@ -11,6 +11,7 @@ mod logger;
 mod shared;
 mod slack;
 mod slack_bot;
+mod teams_bot;
 
 use clap::{Parser, Subcommand};
 
