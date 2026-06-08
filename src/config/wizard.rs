@@ -322,6 +322,7 @@ fn collect_claude(existing: Option<&ClaudeConfig>) -> Result<ClaudeConfig, AppEr
         api_key,
         timeout_ms: None,
         sandbox: cfg!(target_os = "linux"),
+        sandbox_extra_paths: Vec::new(),
     })
 }
 
