@@ -72,12 +72,24 @@ fn build_script_shell_cmd(pm: &str, script: &str, node_version: Option<&str>) ->
             r#"nvm use "{v}" 2>/dev/null || nvm install "{v}" 2>/dev/null || true"#
         ));
     }
-    // Prepend common standalone pnpm / yarn paths (no-op if already in PATH).
+    // Prepend common standalone pnpm/yarn paths and well-known Node.js install locations.
     parts.push(
-        r#"export PATH="$HOME/.local/share/pnpm:$HOME/.yarn/bin:$HOME/Library/pnpm:$PATH""#
+        r#"export PATH="$HOME/.local/share/pnpm:$HOME/.yarn/bin:$HOME/Library/pnpm:$HOME/.volta/bin:/usr/local/bin:/usr/bin:$PATH""#
             .to_string(),
     );
-    parts.push(format!("{pm} run {script}"));
+    // If the detected package manager is not on PATH, try corepack then fall back to npm.
+    if pm != "npm" {
+        parts.push(format!(
+            r#"command -v {pm} >/dev/null 2>&1 || corepack enable {pm} 2>/dev/null || true"#
+        ));
+        parts.push(format!(
+            r#"if command -v {pm} >/dev/null 2>&1; then {pm} run {script}; elif command -v npm >/dev/null 2>&1; then npm run {script}; else echo "No package manager found (tried {pm} and npm). Is Node.js installed?" >&2; exit 127; fi"#
+        ));
+    } else {
+        parts.push(format!(
+            r#"if command -v npm >/dev/null 2>&1; then npm run {script}; else echo "npm not found. Is Node.js installed and on PATH?" >&2; exit 127; fi"#
+        ));
+    }
     parts.join("; ")
 }
 
@@ -323,12 +335,20 @@ pub async fn ask_with_session(
             sender
                 .edit_with_keyboard(&status_ref, "Cancelled.", vec![])
                 .await?;
+            let keyboard = session_keyboard(false, git_opt.as_ref()).await;
+            sender
+                .send_with_keyboard(chat_id, "What would you like to do next?", keyboard)
+                .await?;
             return Ok(());
         }
         Err(e) => {
             state.logger.error(&format!("ask: Claude error: {e}"), None);
             sender
                 .edit_with_keyboard(&status_ref, &format!("Error: {e}"), vec![])
+                .await?;
+            let keyboard = session_keyboard(false, git_opt.as_ref()).await;
+            sender
+                .send_with_keyboard(chat_id, "What would you like to do next?", keyboard)
                 .await?;
             return Ok(());
         }
