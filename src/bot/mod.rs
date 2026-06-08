@@ -306,6 +306,7 @@ impl AppState {
                         model: None,
                         api_key: claude_cfg.api_key.clone(),
                         sandbox_enabled: claude_cfg.sandbox,
+                        sandbox_extra_paths: claude_cfg.sandbox_extra_paths.clone(),
                     },
                     Arc::clone(&logger),
                 ))

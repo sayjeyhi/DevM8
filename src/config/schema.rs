@@ -86,6 +86,12 @@ pub struct ClaudeConfig {
     /// Defaults to true on Linux, false on macOS.
     #[serde(default = "default_sandbox")]
     pub sandbox: bool,
+    /// Extra absolute paths to bind and prepend to PATH inside the sandbox.
+    /// Use this to expose tools (e.g. a specific nvm node version) that the
+    /// daemon cannot auto-discover because they are not on the service PATH.
+    /// Example: ["/home/jafar/.nvm/versions/node/v24.16.0/bin"]
+    #[serde(default)]
+    pub sandbox_extra_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
