@@ -204,10 +204,10 @@ impl ClaudeClient {
                 extra_paths.push(yarn_bin.to_string());
             }
 
-            // Any tool (node, npm, pnpm, yarn, nvm) that resolves to a path
+            // Any tool (node, npm, pnpm, yarn, npx) that resolves to a path
             // under /home (e.g. installed via a per-user package manager) needs
             // its parent dotdir bound.  bind_home_subtree handles the lookup.
-            for tool in &["node", "npm", "pnpm", "yarn"] {
+            for tool in &["node", "npm", "pnpm", "yarn", "npx"] {
                 if let Some(path) = resolve_which(tool) {
                     bind_home_subtree(&mut cmd, &path);
                     if let Some(dir) = std::path::Path::new(&path)
@@ -218,6 +218,42 @@ impl ClaudeClient {
                             extra_paths.push(dir);
                         }
                     }
+                }
+            }
+
+            // When the daemon runs as a systemd service its PATH may not include
+            // nvm-managed node versions, so resolve_which above can miss them.
+            // Follow ~/.nvm/alias/default (up to 3 hops) to find the active
+            // node bin dir and add it even when `which node` points elsewhere.
+            let nvm_alias_dir = format!("{host_home}/.nvm/alias");
+            if std::path::Path::new(&nvm_alias_dir).exists() {
+                let mut alias = "default".to_string();
+                for _ in 0..3 {
+                    let alias_file = format!("{nvm_alias_dir}/{alias}");
+                    let Ok(content) = std::fs::read_to_string(&alias_file) else {
+                        break;
+                    };
+                    let resolved = content.trim().to_string();
+                    let host_bin = format!("{host_home}/.nvm/versions/node/{resolved}/bin");
+                    if std::path::Path::new(&host_bin).exists() {
+                        let sandbox_bin =
+                            format!("/home/sandbox/.nvm/versions/node/{resolved}/bin");
+                        if !extra_paths.contains(&sandbox_bin) {
+                            extra_paths.push(sandbox_bin);
+                        }
+                        break;
+                    }
+                    alias = resolved;
+                }
+            }
+        }
+
+        // Explicit extra paths from config.sandbox_extra_paths.
+        for host_path in &self.config.sandbox_extra_paths {
+            if std::path::Path::new(host_path).exists() {
+                bind_home_subtree(&mut cmd, host_path);
+                if !extra_paths.contains(host_path) {
+                    extra_paths.push(host_path.clone());
                 }
             }
         }

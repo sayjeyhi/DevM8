@@ -52,6 +52,8 @@ pub struct ClaudeClientConfig {
     pub api_key: Option<String>,
     /// Isolate Claude subprocess with bubblewrap (effective on Linux only).
     pub sandbox_enabled: bool,
+    /// Extra host paths to bind read-only into the sandbox and prepend to PATH.
+    pub sandbox_extra_paths: Vec<String>,
 }
 
 /// Per-request options that override the client defaults.
