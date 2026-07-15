@@ -13,6 +13,7 @@ pub async fn create_slack_forward_handler(
     sender: Arc<dyn ChannelSender>,
     allowed_chat_ids: Vec<String>,
     message: &SlackNewMessage,
+    jira_project_keys: &[String],
 ) -> Result<()> {
     let snd = &message.sender_name;
     let text = &message.message.text;
@@ -25,7 +26,7 @@ pub async fn create_slack_forward_handler(
         sender.escape(text)
     );
 
-    let keyboard = vec![vec![
+    let mut keyboard = vec![vec![
         Button::new(
             "\u{21a9}\u{fe0f} Reply",
             format!("slack:reply:{}:{}", channel_id, ts),
@@ -35,6 +36,14 @@ pub async fn create_slack_forward_handler(
             format!("slack:ai:{}:{}", channel_id, ts),
         ),
     ]];
+
+    // If the message mentions a known Jira ticket, offer to have AI check/solve it.
+    for issue_key in crate::jira::extract_issue_keys(text, jira_project_keys) {
+        keyboard.push(vec![Button::new(
+            format!("\u{1f916} Check & solve {}?", issue_key),
+            format!("slack:solve:{}", issue_key),
+        )]);
+    }
 
     for chat_id in &allowed_chat_ids {
         let _ = sender
@@ -111,6 +120,7 @@ pub async fn handle_pending_slack_reply(
 pub async fn handle_slack_callback(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
+    user_id: &str,
     action_data: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
@@ -122,6 +132,22 @@ pub async fn handle_slack_callback(
     let action = parts[1];
 
     match action {
+        "solve" => {
+            if parts.len() < 3 {
+                return Ok(());
+            }
+            let issue_key = parts[2].to_string();
+
+            state.logger.info(
+                "slack: AI solve requested from forwarded message",
+                Some(&json!({ "key": &issue_key })),
+            );
+
+            return crate::bot::commands::solve::handle_solve(
+                sender, chat_id, state, user_id, issue_key,
+            )
+            .await;
+        }
         "reply" => {
             if parts.len() < 4 {
                 return Ok(());

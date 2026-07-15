@@ -78,6 +78,33 @@ pub struct PendingAsk {
 }
 
 // ---------------------------------------------------------------------------
+// Worktree branch name confirmation — shared by /ask and /solve's implement step
+// ---------------------------------------------------------------------------
+
+/// What to do once the user confirms or replaces the suggested worktree branch name.
+#[derive(Debug, Clone)]
+pub enum WorktreeReadyAction {
+    /// Immediately run this question in the new session.
+    AskQuestion(String),
+    /// Show the standard "repo ready" message (branch/status/buttons).
+    RepoReady {
+        project_key: String,
+        repo_name: String,
+    },
+    /// Just send this plain text message.
+    Message(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingWorktreeBranch {
+    pub user_id: String,
+    pub main_git: Arc<GitClient>,
+    /// Optional system context to attach to the new AskSession (e.g. grill Q&A).
+    pub context: Option<String>,
+    pub on_ready: WorktreeReadyAction,
+}
+
+// ---------------------------------------------------------------------------
 // Pending Slack reply
 // ---------------------------------------------------------------------------
 
@@ -224,6 +251,9 @@ pub struct ChatState {
 
     /// Waiting for user to type a freeform ask input
     pub pending_ask: Option<PendingAsk>,
+
+    /// Waiting for user to confirm or replace a suggested worktree branch name
+    pub pending_worktree_branch: Option<PendingWorktreeBranch>,
 
     /// Active ask session
     pub ask_session: Option<AskSession>,

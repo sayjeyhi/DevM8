@@ -5,7 +5,9 @@ use serde_json::json;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::bot::state::{AskMode, AskSession, HistoryEntry, PendingAsk, Role};
+use crate::bot::state::{
+    AskMode, AskSession, HistoryEntry, PendingAsk, PendingWorktreeBranch, Role, WorktreeReadyAction,
+};
 use crate::bot::AppState;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
@@ -436,6 +438,143 @@ fn accessible_repos(
     repos
 }
 
+// ---------------------------------------------------------------------------
+// Worktree branch name confirmation — shared by /ask and /solve's implement step
+// ---------------------------------------------------------------------------
+
+/// Build a short git-safe slug from freeform text, keeping at most `max_words` words.
+fn slugify(text: &str, max_words: usize) -> String {
+    text.split_whitespace()
+        .take(max_words)
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Suggest a branch name for a new /ask worktree session, derived from the question text.
+fn suggest_ask_branch_name(question: &str, user_id: &str) -> String {
+    let slug = slugify(question, 6);
+    let suffix_start = user_id.len().saturating_sub(4);
+    let user_suffix = &user_id[suffix_start..];
+    if slug.is_empty() {
+        format!("ask/session-{}", user_suffix)
+    } else {
+        format!("ask/{}-{}", slug, user_suffix)
+    }
+}
+
+/// Send a suggested branch name and remember what to do once the user confirms or
+/// replaces it (mirrors the /solve "new branch" confirmation flow).
+#[allow(clippy::too_many_arguments)]
+pub async fn prompt_worktree_branch_name(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+    user_id: &str,
+    main_git: Arc<crate::git::GitClient>,
+    suggested: String,
+    context: Option<String>,
+    on_ready: WorktreeReadyAction,
+) -> Result<()> {
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.pending_worktree_branch = Some(PendingWorktreeBranch {
+            user_id: user_id.to_string(),
+            main_git,
+            context,
+            on_ready,
+        });
+    }
+    sender
+        .send(
+            chat_id,
+            &format!(
+                "Suggested branch name: <code>{}</code>\n\nSend a name to use it, or type a different one:",
+                sender.escape(&suggested)
+            ),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Handle the user's reply to `prompt_worktree_branch_name`: create the worktree/branch
+/// with the given name, then run the stored follow-up action.
+pub async fn handle_worktree_branch_name_input(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+    branch_name: String,
+) -> Result<()> {
+    let branch_name = branch_name.trim().to_string();
+    if branch_name.is_empty() {
+        return Ok(());
+    }
+
+    let pending = state
+        .chat_states
+        .get(chat_id)
+        .and_then(|cs| cs.pending_worktree_branch.clone());
+
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.pending_worktree_branch = None;
+    }
+
+    state.logger.info(
+        "worktree: creating branch from user input",
+        Some(&json!({ "branch": &branch_name })),
+    );
+
+    let mut session = state
+        .worktree_session(&pending.user_id, pending.main_git, &branch_name)
+        .await;
+    if let Some(ctx) = pending.context {
+        session = session.with_context(ctx);
+    }
+    let session_git = session.git.clone();
+
+    {
+        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+        entry.ask_session = Some(session);
+    }
+
+    match pending.on_ready {
+        WorktreeReadyAction::AskQuestion(question) => {
+            return ask_with_session(sender, chat_id, state, question).await;
+        }
+        WorktreeReadyAction::RepoReady {
+            project_key,
+            repo_name,
+        } => {
+            if let Some(ref g) = session_git {
+                send_repo_ready_message(&sender, chat_id, &project_key, &repo_name, g).await?;
+            } else {
+                sender
+                    .send(
+                        chat_id,
+                        "What would you like to ask Claude about this repository?",
+                    )
+                    .await?;
+            }
+        }
+        WorktreeReadyAction::Message(text) => {
+            sender.send(chat_id, &text).await?;
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn handle_ask(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
@@ -490,37 +629,48 @@ pub async fn handle_ask(
             .find(|g| g.repo_path == *repo_path)
             .cloned();
 
-        let session = if let Some(mg) = main_git {
-            state.worktree_session(user_id, mg).await
-        } else {
-            AskSession::new(user_id, Some(repo_path.clone()), None)
-        };
-        let session_git = session.git.clone();
-
-        {
-            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-            entry.ask_session = Some(session);
-        }
-
-        if question.is_empty() {
-            let repo_name = repo_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("repo");
-            if let Some(ref g) = session_git {
-                send_repo_ready_message(&sender, chat_id, project_key, repo_name, g).await?;
-            } else {
+        let Some(mg) = main_git else {
+            {
+                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+                entry.ask_session = Some(AskSession::new(user_id, Some(repo_path.clone()), None));
+            }
+            if question.is_empty() {
                 sender
                     .send(
                         chat_id,
                         "What would you like to ask Claude about this repository?",
                     )
                     .await?;
+                return Ok(());
             }
-            return Ok(());
-        }
+            return ask_with_session(Arc::clone(&sender), chat_id, state, question).await;
+        };
 
-        return ask_with_session(Arc::clone(&sender), chat_id, state, question).await;
+        let repo_name = repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("repo")
+            .to_string();
+        let on_ready = if question.is_empty() {
+            WorktreeReadyAction::RepoReady {
+                project_key: project_key.clone(),
+                repo_name,
+            }
+        } else {
+            WorktreeReadyAction::AskQuestion(question.clone())
+        };
+        let suggested = suggest_ask_branch_name(&question, user_id);
+        return prompt_worktree_branch_name(
+            Arc::clone(&sender),
+            chat_id,
+            state,
+            user_id,
+            mg,
+            suggested,
+            None,
+            on_ready,
+        )
+        .await;
     }
 
     // Multiple projects — show picker
@@ -845,30 +995,36 @@ pub async fn handle_ask_session_callback(
             })
         };
 
-        let session = state.worktree_session(user_id, main_git).await;
-        let session_git = session.git.clone();
-
         {
             let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
             entry.pending_ask = None;
-            entry.ask_session = Some(session);
         }
 
-        if let Some(q_text) = question {
-            ask_with_session(Arc::clone(&sender), chat_id, state, q_text).await?;
-        } else {
-            let repo_name = repo_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("repo");
-            if let Some(ref g) = session_git {
-                send_repo_ready_message(&sender, chat_id, &project_key, repo_name, g).await?;
-            } else {
-                sender.send(chat_id, "What would you like to ask?").await?;
-            }
-        }
+        let repo_name = repo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("repo")
+            .to_string();
+        let on_ready = match question.clone() {
+            Some(q) => WorktreeReadyAction::AskQuestion(q),
+            None => WorktreeReadyAction::RepoReady {
+                project_key,
+                repo_name,
+            },
+        };
+        let suggested = suggest_ask_branch_name(question.as_deref().unwrap_or(""), user_id);
 
-        return Ok(());
+        return prompt_worktree_branch_name(
+            Arc::clone(&sender),
+            chat_id,
+            state,
+            user_id,
+            main_git,
+            suggested,
+            None,
+            on_ready,
+        )
+        .await;
     }
 
     // ask:script:<name> — run a package.json script directly.

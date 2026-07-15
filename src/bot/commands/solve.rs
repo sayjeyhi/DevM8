@@ -6,8 +6,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::bot::state::{
     AskSession, ChatState, PendingGrill, PendingPostAnalysis, PendingSolve, PendingSolveAction,
+    WorktreeReadyAction,
 };
 use crate::bot::AppState;
+use crate::bot::commands::ask::prompt_worktree_branch_name;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
 use crate::shared::errors::{AppError, ClaudeError};
@@ -565,22 +567,34 @@ pub async fn handle_solve_action_callback(
                 cwd.clone(),
             )
             .await?;
-            let session = if let Some(mg) = git {
-                state.worktree_session(user_id, mg).await
-            } else {
-                AskSession::new(user_id, None, None)
+            let Some(mg) = git else {
+                let session = AskSession::new(user_id, None, None);
+                {
+                    let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+                    entry.ask_session = Some(session);
+                }
+                sender
+                    .send(
+                        chat_id,
+                        "Implementation session started. Send a message to continue.",
+                    )
+                    .await?;
+                return Ok(());
             };
-            {
-                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-                entry.ask_session = Some(session);
-            }
-            sender
-                .send(
-                    chat_id,
-                    "Implementation session started. Send a message to continue.",
-                )
-                .await?;
-            Ok(())
+            let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+            prompt_worktree_branch_name(
+                Arc::clone(&sender),
+                chat_id,
+                state,
+                user_id,
+                mg,
+                suggested,
+                None,
+                WorktreeReadyAction::Message(
+                    "Implementation session started. Send a message to continue.".to_string(),
+                ),
+            )
+            .await
         }
         _ => Ok(()),
     }
@@ -1012,29 +1026,38 @@ pub async fn handle_post_analysis_implement(
         cs.pending_post_analysis = None;
     }
 
-    let session = if let Some(mg) = p.git {
-        state.worktree_session(user_id, mg).await
-    } else {
-        AskSession::new(user_id, None, None)
+    let Some(mg) = p.git else {
+        let session = match p.qa_context {
+            Some(ctx) => AskSession::new(user_id, None, None).with_context(ctx),
+            None => AskSession::new(user_id, None, None),
+        };
+        {
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+            entry.ask_session = Some(session);
+        }
+        sender
+            .send(
+                chat_id,
+                "Implementation session started. Send a message to begin.",
+            )
+            .await?;
+        return Ok(());
     };
-    let session = match p.qa_context {
-        Some(ctx) => session.with_context(ctx),
-        None => session,
-    };
 
-    {
-        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-        entry.ask_session = Some(session);
-    }
-
-    sender
-        .send(
-            chat_id,
-            "Implementation session started. Send a message to begin.",
-        )
-        .await?;
-
-    Ok(())
+    let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+    prompt_worktree_branch_name(
+        Arc::clone(&sender),
+        chat_id,
+        state,
+        user_id,
+        mg,
+        suggested,
+        p.qa_context,
+        WorktreeReadyAction::Message(
+            "Implementation session started. Send a message to begin.".to_string(),
+        ),
+    )
+    .await
 }
 
 pub async fn handle_solve(

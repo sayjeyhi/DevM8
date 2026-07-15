@@ -18,6 +18,7 @@ use super::commands::{
     handle_permissions_done, handle_permissions_revoke, handle_permissions_toggle,
     handle_permissions_user_input, handle_permissions_user_select, handle_post_analysis_implement,
     handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,
+    handle_worktree_branch_name_input,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
 use super::sender::TelegramSender;
@@ -116,6 +117,17 @@ pub async fn start_polling(
         let interval_ms = slack_cfg.poll_interval_ms;
         let cancelled_clone = Arc::clone(&slack_cancel_flag);
 
+        // Known Jira project keys, used to recognize ticket mentions in forwarded
+        // Slack messages (global config + every configured per-user Jira account).
+        let mut jira_project_keys: Vec<String> = config
+            .jira
+            .as_ref()
+            .map(|j| j.project_keys.clone())
+            .unwrap_or_default();
+        for user_cfg in config.user_jira.values() {
+            jira_project_keys.extend(user_cfg.project_keys.iter().cloned());
+        }
+
         let handle = tokio::spawn(async move {
             use crate::slack::poller::{MessageHandler, SlackPoller};
 
@@ -125,12 +137,18 @@ pub async fn start_polling(
             let on_message: MessageHandler = Box::new(move |new_msg| {
                 let bot = bot_inner.clone();
                 let ids = ids.clone();
+                let jira_project_keys = jira_project_keys.clone();
                 Box::pin(async move {
                     let sender: Arc<dyn crate::channel::ChannelSender> =
                         Arc::new(TelegramSender::new(bot));
                     let chat_ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
-                    crate::bot::handlers::create_slack_forward_handler(sender, chat_ids, &new_msg)
-                        .await
+                    crate::bot::handlers::create_slack_forward_handler(
+                        sender,
+                        chat_ids,
+                        &new_msg,
+                        &jira_project_keys,
+                    )
+                    .await
                 })
             });
 
@@ -548,7 +566,7 @@ async fn dispatch_callback(
     }
 
     if data.starts_with("slack:") {
-        return handle_slack_callback(Arc::clone(&sender), &chat_id, &data, state).await;
+        return handle_slack_callback(Arc::clone(&sender), &chat_id, &user_id, &data, state).await;
     }
 
     if data.starts_with("perms:") {
@@ -673,6 +691,12 @@ async fn dispatch_message(
             .unwrap_or(false)
         {
             "pending_solve_branch_name"
+        } else if s
+            .as_deref()
+            .map(|s| s.pending_worktree_branch.is_some())
+            .unwrap_or(false)
+        {
+            "pending_worktree_branch_name"
         } else if s
             .as_deref()
             .map(|s| s.pending_grill.is_some())
@@ -814,6 +838,19 @@ async fn dispatch_message(
         .await;
     }
 
+    // Check pending worktree branch name confirmation (ask + solve implement)
+    let awaiting_worktree_branch = state
+        .chat_states
+        .get(&chat_id)
+        .map(|s| s.pending_worktree_branch.is_some())
+        .unwrap_or(false);
+
+    if awaiting_worktree_branch {
+        let branch_name = msg.text().unwrap_or("").trim().to_string();
+        return handle_worktree_branch_name_input(Arc::clone(&sender), &chat_id, state, branch_name)
+            .await;
+    }
+
     // Check active grill session
     let has_pending_grill = state
         .chat_states
@@ -939,6 +976,7 @@ fn clear_pending_states(state: &Arc<AppState>, chat_id: &str) {
         cs.pending_admin_action = None;
         cs.pending_slack_reply = None;
         cs.pending_solve = None;
+        cs.pending_worktree_branch = None;
         cs.pending_permissions = None;
     }
 }

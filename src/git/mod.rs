@@ -224,26 +224,26 @@ impl GitClient {
         }
     }
 
-    /// Create an isolated worktree for `user_id` at `origin/main`.
-    /// Any previous worktree for the same user is removed first.
+    /// Create an isolated worktree for `user_id` at `origin/main`, checked out onto `branch`.
+    /// Any previous worktree for the same user is removed first, and any existing local
+    /// branch with the same name is force-deleted so it always starts fresh from `origin/main`.
     /// The worktree is placed at `<repo>/.worktrees/<user_id>/`.
     /// `.worktrees/` is automatically added to the repo's `.gitignore`.
     /// `user_id` accepts both Telegram numeric strings and Slack "U…" IDs.
-    pub async fn create_worktree(&self, user_id: &str) -> Result<PathBuf> {
+    pub async fn create_worktree(&self, user_id: &str, branch: &str) -> Result<PathBuf> {
         self.ensure_gitignore_worktrees().await;
         let path = self.worktree_path(user_id);
         if path.exists() {
             let _ = self.remove_worktree(user_id).await;
         }
         let _ = self.exec(&["fetch", "origin", "main"]).await;
-        let branch = format!("session/{}", user_id);
-        let _ = self.exec(&["branch", "-D", &branch]).await;
+        let _ = self.exec(&["branch", "-D", branch]).await;
         let path_str = path.to_string_lossy().into_owned();
-        self.run(&["worktree", "add", &path_str, "-b", &branch, "origin/main"])
+        self.run(&["worktree", "add", &path_str, "-b", branch, "origin/main"])
             .await?;
         // Set tracking so commits_behind/ahead and plain `git pull` work correctly.
         let _ = self
-            .exec(&["branch", "--set-upstream-to", "origin/main", &branch])
+            .exec(&["branch", "--set-upstream-to", "origin/main", branch])
             .await;
         Ok(path)
     }

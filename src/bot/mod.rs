@@ -229,8 +229,9 @@ impl AppState {
         &self,
         user_id: &str,
         main_git: Arc<GitClient>,
+        branch: &str,
     ) -> state::AskSession {
-        match main_git.create_worktree(user_id).await {
+        match main_git.create_worktree(user_id, branch).await {
             Ok(wt_path) => {
                 let wt_git = Arc::new(GitClient::new(wt_path.clone()));
                 let mut session = state::AskSession::new(user_id, Some(wt_path), Some(wt_git));

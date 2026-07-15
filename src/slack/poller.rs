@@ -55,13 +55,14 @@ impl SlackPoller {
     /// Run the poll loop until the `cancelled` flag is set to `true`.
     pub async fn start(&self, cancelled: Arc<std::sync::atomic::AtomicBool>) {
         let mut channel_cache: Option<(Vec<SlackChannel>, std::time::Instant)> = None;
+        let mut cursor: usize = 0;
 
         loop {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
 
-            match self.poll(&mut channel_cache).await {
+            match self.poll(&mut channel_cache, &mut cursor).await {
                 Ok(()) => {}
                 Err(e) => {
                     // Check if it's a rate-limit error.
@@ -91,6 +92,7 @@ impl SlackPoller {
     async fn poll(
         &self,
         channel_cache: &mut Option<(Vec<SlackChannel>, std::time::Instant)>,
+        cursor: &mut usize,
     ) -> anyhow::Result<()> {
         let mut state = load_slack_state().await?;
         let mut state_changed = false;
@@ -111,84 +113,89 @@ impl SlackPoller {
             channel_cache.as_ref().unwrap().0.clone()
         };
 
+        if channels.is_empty() {
+            return Ok(());
+        }
+
         let now_ts = unix_now_ts();
 
         // ----------------------------------------------------------------
-        // Process each channel
+        // Round-robin: check exactly one channel per poll cycle. Slack's
+        // rate limit for conversations.history/replies is per-minute across
+        // the whole app, not per-channel, so looping over every DM on every
+        // tick blows through it as soon as there's more than a handful of
+        // channels. Spreading the work across cycles keeps us to at most a
+        // couple of calls per `interval_ms`, at the cost of checking any
+        // single channel less often.
         // ----------------------------------------------------------------
-        let mut active_threads: Vec<(String, String)> = Vec::new(); // (channel_id, thread_ts)
+        let idx = *cursor % channels.len();
+        *cursor = (*cursor + 1) % channels.len();
+        let channel = &channels[idx];
 
-        for channel in &channels {
-            // Skip archived.
-            if channel.is_archived.unwrap_or(false) {
-                continue;
+        let mut active_thread: Option<String> = None; // thread_ts, if any
+
+        if channel.is_archived.unwrap_or(false) {
+            return Ok(());
+        }
+
+        let last_ts = state.last_ts.get(&channel.id).cloned();
+
+        if last_ts.is_none() {
+            // First time seeing this channel — bookmark now, skip history.
+            state.last_ts.insert(channel.id.clone(), now_ts.clone());
+            save_slack_state(&state).await?;
+            return Ok(());
+        }
+
+        let oldest = last_ts.as_deref();
+        let messages = self.client.get_history(&channel.id, oldest, 50).await?;
+
+        // Iterate in chronological order (oldest first).
+        let mut reversed: Vec<_> = messages;
+        reversed.reverse();
+
+        let mut new_last_ts: Option<String> = None;
+
+        for msg in &reversed {
+            let sender_name = self.resolve_username(&msg.user).await;
+
+            let new_msg = SlackNewMessage {
+                channel: channel.clone(),
+                message: msg.clone(),
+                sender_name,
+            };
+
+            if let Err(e) = (self.on_message)(new_msg).await {
+                error!("Message handler error: {}", e);
             }
 
-            let last_ts = state.last_ts.get(&channel.id).cloned();
+            new_last_ts = Some(msg.ts.clone());
 
-            if last_ts.is_none() {
-                // First time seeing this channel — bookmark now, skip history.
-                state.last_ts.insert(channel.id.clone(), now_ts.clone());
-                state_changed = true;
-                continue;
-            }
-
-            let oldest = last_ts.as_deref();
-            let messages = self.client.get_history(&channel.id, oldest, 50).await?;
-
-            // Iterate in chronological order (oldest first).
-            let mut reversed: Vec<_> = messages;
-            reversed.reverse();
-
-            let mut new_last_ts: Option<String> = None;
-
-            for msg in &reversed {
-                let sender_name = self.resolve_username(&msg.user).await;
-
-                let new_msg = SlackNewMessage {
-                    channel: channel.clone(),
-                    message: msg.clone(),
-                    sender_name,
-                };
-
-                if let Err(e) = (self.on_message)(new_msg).await {
-                    error!("Message handler error: {}", e);
-                }
-
-                new_last_ts = Some(msg.ts.clone());
-
-                // Track threads (messages with replies).
-                if msg.reply_count.unwrap_or(0) > 0 {
-                    active_threads.push((channel.id.clone(), msg.ts.clone()));
-                }
-            }
-
-            if let Some(ts) = new_last_ts {
-                state.last_ts.insert(channel.id.clone(), ts);
-                state_changed = true;
+            // Track the most recent thread with replies (checked below).
+            if msg.reply_count.unwrap_or(0) > 0 {
+                active_thread = Some(msg.ts.clone());
             }
         }
 
+        if let Some(ts) = new_last_ts {
+            state.last_ts.insert(channel.id.clone(), ts);
+            state_changed = true;
+        }
+
         // ----------------------------------------------------------------
-        // Process thread replies
+        // Process replies for at most one thread in this channel.
         // ----------------------------------------------------------------
-        for (channel_id, thread_ts) in &active_threads {
+        if let Some(thread_ts) = active_thread {
             let last_reply_ts = state
                 .thread_ts
-                .get(channel_id)
-                .and_then(|m| m.get(thread_ts))
+                .get(&channel.id)
+                .and_then(|m| m.get(&thread_ts))
                 .cloned();
 
             let replies = self
                 .client
-                .get_replies(channel_id, thread_ts, last_reply_ts.as_deref())
+                .get_replies(&channel.id, &thread_ts, last_reply_ts.as_deref())
                 .await?;
-
-            // Find the channel object.
-            let channel = match channels.iter().find(|c| &c.id == channel_id) {
-                Some(c) => c.clone(),
-                None => continue,
-            };
 
             let mut new_last_reply_ts: Option<String> = None;
 
@@ -211,9 +218,9 @@ impl SlackPoller {
             if let Some(ts) = new_last_reply_ts {
                 state
                     .thread_ts
-                    .entry(channel_id.clone())
+                    .entry(channel.id.clone())
                     .or_insert_with(HashMap::new)
-                    .insert(thread_ts.clone(), ts);
+                    .insert(thread_ts, ts);
                 state_changed = true;
             }
         }
