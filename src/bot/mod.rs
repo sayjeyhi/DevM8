@@ -344,6 +344,13 @@ impl AppState {
             .map(|sc| Arc::new(SlackClient::new(sc.user_token.clone())));
 
         let project_access = RwLock::new(config.telegram.project_access.clone());
+        let slack_project_access = RwLock::new(
+            config
+                .slack
+                .as_ref()
+                .map(|s| s.project_access.clone())
+                .unwrap_or_default(),
+        );
         let teams_project_access = RwLock::new(
             config
                 .teams
@@ -367,7 +374,7 @@ impl AppState {
             bot_username,
             project_access,
             user_names: DashMap::new(),
-            slack_project_access: RwLock::new(HashMap::new()),
+            slack_project_access,
             slack_user_names: DashMap::new(),
             teams_project_access,
             teams_user_names: DashMap::new(),

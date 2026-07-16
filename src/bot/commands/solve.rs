@@ -4,12 +4,12 @@ use anyhow::Result;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use crate::bot::commands::ask::prompt_worktree_branch_name;
 use crate::bot::state::{
     AskSession, ChatState, PendingGrill, PendingPostAnalysis, PendingSolve, PendingSolveAction,
     WorktreeReadyAction,
 };
 use crate::bot::AppState;
-use crate::bot::commands::ask::prompt_worktree_branch_name;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
 use crate::shared::errors::{AppError, ClaudeError};

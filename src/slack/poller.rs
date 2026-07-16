@@ -8,7 +8,8 @@ use std::{
 };
 
 use tokio::time::{sleep, Duration};
-use tracing::{error, info};
+
+use crate::logger::Logger;
 
 use super::{
     client::{SlackClient, SlackRateLimitError},
@@ -35,6 +36,7 @@ pub struct SlackPoller {
     interval_ms: u64,
     on_message: Arc<MessageHandler>,
     on_error: Option<Arc<ErrorHandler>>,
+    logger: Arc<dyn Logger>,
 }
 
 impl SlackPoller {
@@ -43,12 +45,14 @@ impl SlackPoller {
         interval_ms: u64,
         on_message: MessageHandler,
         on_error: Option<ErrorHandler>,
+        logger: Arc<dyn Logger>,
     ) -> Self {
         Self {
             client,
             interval_ms,
             on_message: Arc::new(on_message),
             on_error: on_error.map(Arc::new),
+            logger,
         }
     }
 
@@ -56,6 +60,11 @@ impl SlackPoller {
     pub async fn start(&self, cancelled: Arc<std::sync::atomic::AtomicBool>) {
         let mut channel_cache: Option<(Vec<SlackChannel>, std::time::Instant)> = None;
         let mut cursor: usize = 0;
+
+        self.logger.info(
+            "slack poller starting",
+            Some(&serde_json::json!({ "interval_ms": self.interval_ms })),
+        );
 
         loop {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
@@ -68,21 +77,29 @@ impl SlackPoller {
                     // Check if it's a rate-limit error.
                     if let Some(rle) = e.downcast_ref::<SlackRateLimitError>() {
                         let wait_ms = rle.retry_after_seconds * 1_000;
-                        info!("Slack rate limited; waiting {}ms", wait_ms);
+                        self.logger.warn(
+                            "slack poller rate limited",
+                            Some(&serde_json::json!({ "wait_ms": wait_ms })),
+                        );
                         sleep(Duration::from_millis(wait_ms)).await;
                         continue;
                     }
 
+                    self.logger.error(
+                        "slack poller error",
+                        Some(&serde_json::json!({ "error": e.to_string() })),
+                    );
+
                     if let Some(ref handler) = self.on_error {
                         handler(e);
-                    } else {
-                        error!("SlackPoller error: {}", e);
                     }
                 }
             }
 
             sleep(Duration::from_millis(self.interval_ms)).await;
         }
+
+        self.logger.info("slack poller stopped", None);
     }
 
     // -----------------------------------------------------------------------
@@ -106,7 +123,16 @@ impl SlackPoller {
                 .unwrap_or(true);
 
             if needs_refresh {
-                let fetched = self.client.list_im_channels().await?;
+                let fetched = self.client.list_im_channels().await.inspect_err(|e| {
+                    self.logger.error(
+                        "slack: failed to list im channels",
+                        Some(&serde_json::json!({ "error": e.to_string() })),
+                    );
+                })?;
+                self.logger.debug(
+                    "slack: refreshed channel list",
+                    Some(&serde_json::json!({ "channel_count": fetched.len() })),
+                );
                 *channel_cache = Some((fetched, now));
             }
 
@@ -114,6 +140,8 @@ impl SlackPoller {
         };
 
         if channels.is_empty() {
+            self.logger
+                .debug("slack: no im/mpim channels to poll", None);
             return Ok(());
         }
 
@@ -148,11 +176,27 @@ impl SlackPoller {
         }
 
         let oldest = last_ts.as_deref();
-        let messages = self.client.get_history(&channel.id, oldest, 50).await?;
+        let messages = self
+            .client
+            .get_history(&channel.id, oldest, 50)
+            .await
+            .inspect_err(|e| {
+                self.logger.error(
+                    "slack: failed to fetch channel history",
+                    Some(&serde_json::json!({ "channel_id": channel.id, "error": e.to_string() })),
+                );
+            })?;
 
         // Iterate in chronological order (oldest first).
         let mut reversed: Vec<_> = messages;
         reversed.reverse();
+
+        if !reversed.is_empty() {
+            self.logger.debug(
+                "slack: new messages found",
+                Some(&serde_json::json!({ "channel_id": channel.id, "count": reversed.len() })),
+            );
+        }
 
         let mut new_last_ts: Option<String> = None;
 
@@ -166,7 +210,10 @@ impl SlackPoller {
             };
 
             if let Err(e) = (self.on_message)(new_msg).await {
-                error!("Message handler error: {}", e);
+                self.logger.error(
+                    "slack: message handler error",
+                    Some(&serde_json::json!({ "channel_id": channel.id, "error": e.to_string() })),
+                );
             }
 
             new_last_ts = Some(msg.ts.clone());
@@ -195,7 +242,13 @@ impl SlackPoller {
             let replies = self
                 .client
                 .get_replies(&channel.id, &thread_ts, last_reply_ts.as_deref())
-                .await?;
+                .await
+                .inspect_err(|e| {
+                    self.logger.error(
+                        "slack: failed to fetch thread replies",
+                        Some(&serde_json::json!({ "channel_id": channel.id, "thread_ts": thread_ts, "error": e.to_string() })),
+                    );
+                })?;
 
             let mut new_last_reply_ts: Option<String> = None;
 
@@ -209,7 +262,10 @@ impl SlackPoller {
                 };
 
                 if let Err(e) = (self.on_message)(new_msg).await {
-                    error!("Reply handler error: {}", e);
+                    self.logger.error(
+                        "slack: reply handler error",
+                        Some(&serde_json::json!({ "channel_id": channel.id, "error": e.to_string() })),
+                    );
                 }
 
                 new_last_reply_ts = Some(reply.ts.clone());

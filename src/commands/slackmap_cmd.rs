@@ -96,16 +96,21 @@ pub async fn slackmap_command() -> Result<(), AppError> {
     let poll_interval_ms = interval_raw.trim().parse::<u64>().unwrap_or(30) * 1000;
 
     // ------------------------------------------------------------------
-    // Save updated config.
+    // Save updated config, preserving bot/app tokens and access settings
+    // that this command doesn't prompt for.
     // ------------------------------------------------------------------
+    let existing = config.slack.take();
     config.slack = Some(SlackConfig {
         user_token,
         poll_interval_ms,
-        bot_token: None,
-        app_token: None,
-        allowed_user_ids: vec![],
-        admin_user_id: None,
-        project_access: std::collections::HashMap::new(),
+        bot_token: existing.as_ref().and_then(|s| s.bot_token.clone()),
+        app_token: existing.as_ref().and_then(|s| s.app_token.clone()),
+        allowed_user_ids: existing
+            .as_ref()
+            .map(|s| s.allowed_user_ids.clone())
+            .unwrap_or_default(),
+        admin_user_id: existing.as_ref().and_then(|s| s.admin_user_id.clone()),
+        project_access: existing.map(|s| s.project_access).unwrap_or_default(),
     });
 
     write_config(&config, None)?;
