@@ -112,7 +112,7 @@ pub async fn start_polling(
     let _slack_poller_handle =
         if let (Some(slack_cfg), Some(slack_client)) = (&config.slack, state.slack.clone()) {
             let bot_clone = bot.clone();
-            let allowed_ids_clone = allowed_ids.clone();
+            let admin_id = config.telegram.admin_user_id;
             let interval_ms = slack_cfg.poll_interval_ms;
             let cancelled_clone = Arc::clone(&slack_cancel_flag);
             let logger_clone = Arc::clone(logger);
@@ -132,16 +132,16 @@ pub async fn start_polling(
                 use crate::slack::poller::{MessageHandler, SlackPoller};
 
                 let bot_inner = bot_clone.clone();
-                let ids: Vec<i64> = allowed_ids_clone.iter().copied().collect();
 
                 let on_message: MessageHandler = Box::new(move |new_msg| {
                     let bot = bot_inner.clone();
-                    let ids = ids.clone();
+                    let admin_id = admin_id;
                     let jira_project_keys = jira_project_keys.clone();
                     Box::pin(async move {
                         let sender: Arc<dyn crate::channel::ChannelSender> =
                             Arc::new(TelegramSender::new(bot));
-                        let chat_ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+                        let chat_ids: Vec<String> =
+                            admin_id.iter().map(|id| id.to_string()).collect();
                         crate::bot::handlers::create_slack_forward_handler(
                             sender,
                             chat_ids,

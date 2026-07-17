@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::bot::commands::ask::prompt_worktree_branch_name;
+use crate::bot::commands::ask::{ask_with_session, prompt_worktree_branch_name};
 use crate::bot::state::{
     AskSession, ChatState, PendingGrill, PendingPostAnalysis, PendingSolve, PendingSolveAction,
     WorktreeReadyAction,
@@ -57,6 +57,12 @@ Please provide:
 
 Be specific, technical, and actionable. Format your response clearly.";
 
+const AUTO_IMPLEMENT_QUESTION: &str = "\
+Implement the fix described in the analysis above. Make the necessary code changes now — \
+don't wait for further confirmation. Report back with a summary when done.";
+
+/// Runs the Claude analysis for `issue_key` and returns the analysis text.
+/// Returns `Ok(None)` if analysis could not complete (error already reported to the chat).
 pub async fn solve_by_key(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
@@ -64,7 +70,7 @@ pub async fn solve_by_key(
     user_id: &str,
     issue_key: &str,
     cwd: Option<String>,
-) -> Result<()> {
+) -> Result<Option<String>> {
     state.logger.info(
         "solve: fetching issue",
         Some(&json!({ "key": issue_key, "cwd": cwd.as_deref().unwrap_or("(none)") })),
@@ -92,7 +98,7 @@ pub async fn solve_by_key(
                 vec![],
             )
             .await?;
-        return Ok(());
+        return Ok(None);
     };
     let issue = match jira.get_issue_by_key(issue_key).await {
         Ok(i) => i,
@@ -109,7 +115,7 @@ pub async fn solve_by_key(
                     vec![],
                 )
                 .await?;
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -176,7 +182,7 @@ pub async fn solve_by_key(
             sender
                 .edit_with_keyboard(&status_ref, "Cancelled.", vec![])
                 .await?;
-            return Ok(());
+            return Ok(None);
         }
         Err(e) => {
             state.logger.error(
@@ -186,7 +192,7 @@ pub async fn solve_by_key(
             sender
                 .edit_with_keyboard(&status_ref, &format!("Claude error: {}", e), vec![])
                 .await?;
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -220,7 +226,7 @@ pub async fn solve_by_key(
         }
     }
 
-    Ok(())
+    Ok(Some(analysis))
 }
 
 pub async fn show_solve_action_picker(
@@ -472,7 +478,7 @@ async fn complete_grill(
         Some(&json!({ "key": &grill.issue_key, "questions": grill.qa_history.len() })),
     );
 
-    solve_by_key(
+    let Some(analysis) = solve_by_key(
         Arc::clone(&sender),
         chat_id,
         state.clone(),
@@ -480,14 +486,22 @@ async fn complete_grill(
         &grill.issue_key,
         grill.cwd.clone(),
     )
-    .await?;
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let context = format!(
+        "Analysis for {}:\n\n{}\n\n---\n\n{}",
+        grill.issue_key, analysis, qa_context
+    );
 
     {
         let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.pending_post_analysis = Some(PendingPostAnalysis {
             issue_key: grill.issue_key.clone(),
             git: grill.git.clone(),
-            qa_context: Some(qa_context),
+            context: Some(context),
         });
     }
 
@@ -530,7 +544,7 @@ pub async fn handle_solve_action_callback(
 
     match action {
         "analyze" => {
-            solve_by_key(
+            let Some(analysis) = solve_by_key(
                 Arc::clone(&sender),
                 chat_id,
                 state.clone(),
@@ -538,13 +552,16 @@ pub async fn handle_solve_action_callback(
                 issue_key,
                 cwd.clone(),
             )
-            .await?;
+            .await?
+            else {
+                return Ok(());
+            };
             {
                 let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                 entry.pending_post_analysis = Some(PendingPostAnalysis {
                     issue_key: issue_key.to_string(),
                     git,
-                    qa_context: None,
+                    context: Some(format!("Analysis for {}:\n\n{}", issue_key, analysis)),
                 });
             }
             let keyboard = vec![vec![Button::new(
@@ -558,7 +575,7 @@ pub async fn handle_solve_action_callback(
         }
         "grill" => grill_by_key(sender, chat_id, state, user_id, issue_key, cwd, git).await,
         "implement" => {
-            solve_by_key(
+            let Some(analysis) = solve_by_key(
                 Arc::clone(&sender),
                 chat_id,
                 state.clone(),
@@ -566,20 +583,19 @@ pub async fn handle_solve_action_callback(
                 issue_key,
                 cwd.clone(),
             )
-            .await?;
+            .await?
+            else {
+                return Ok(());
+            };
+            let context = format!("Analysis for {}:\n\n{}", issue_key, analysis);
+            let question = AUTO_IMPLEMENT_QUESTION.to_string();
             let Some(mg) = git else {
-                let session = AskSession::new(user_id, None, None);
+                let session = AskSession::new(user_id, None, None).with_context(context);
                 {
                     let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                     entry.ask_session = Some(session);
                 }
-                sender
-                    .send(
-                        chat_id,
-                        "Implementation session started. Send a message to continue.",
-                    )
-                    .await?;
-                return Ok(());
+                return ask_with_session(sender, chat_id, state, question).await;
             };
             let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
             prompt_worktree_branch_name(
@@ -589,10 +605,8 @@ pub async fn handle_solve_action_callback(
                 user_id,
                 mg,
                 suggested,
-                None,
-                WorktreeReadyAction::Message(
-                    "Implementation session started. Send a message to continue.".to_string(),
-                ),
+                Some(context),
+                WorktreeReadyAction::AskQuestion(question),
             )
             .await
         }
@@ -1026,8 +1040,10 @@ pub async fn handle_post_analysis_implement(
         cs.pending_post_analysis = None;
     }
 
+    let question = AUTO_IMPLEMENT_QUESTION.to_string();
+
     let Some(mg) = p.git else {
-        let session = match p.qa_context {
+        let session = match p.context {
             Some(ctx) => AskSession::new(user_id, None, None).with_context(ctx),
             None => AskSession::new(user_id, None, None),
         };
@@ -1035,13 +1051,7 @@ pub async fn handle_post_analysis_implement(
             let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
             entry.ask_session = Some(session);
         }
-        sender
-            .send(
-                chat_id,
-                "Implementation session started. Send a message to begin.",
-            )
-            .await?;
-        return Ok(());
+        return ask_with_session(sender, chat_id, state, question).await;
     };
 
     let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
@@ -1052,10 +1062,8 @@ pub async fn handle_post_analysis_implement(
         user_id,
         mg,
         suggested,
-        p.qa_context,
-        WorktreeReadyAction::Message(
-            "Implementation session started. Send a message to begin.".to_string(),
-        ),
+        p.context,
+        WorktreeReadyAction::AskQuestion(question),
     )
     .await
 }

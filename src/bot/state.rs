@@ -179,8 +179,8 @@ pub struct PendingGrill {
 pub struct PendingPostAnalysis {
     pub issue_key: String,
     pub git: Option<Arc<GitClient>>,
-    /// Q&A context from grill flow, if any.
-    pub qa_context: Option<String>,
+    /// Analysis text (and grill Q&A, if any) to seed the implement session's context.
+    pub context: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
