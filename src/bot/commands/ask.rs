@@ -567,9 +567,6 @@ pub async fn handle_worktree_branch_name_input(
                     .await?;
             }
         }
-        WorktreeReadyAction::Message(text) => {
-            sender.send(chat_id, &text).await?;
-        }
     }
 
     Ok(())

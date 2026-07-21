@@ -91,8 +91,6 @@ pub enum WorktreeReadyAction {
         project_key: String,
         repo_name: String,
     },
-    /// Just send this plain text message.
-    Message(String),
 }
 
 #[derive(Debug, Clone)]
