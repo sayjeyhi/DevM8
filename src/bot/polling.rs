@@ -109,62 +109,62 @@ pub async fn start_polling(
 
     // Start Slack poller if configured
     let slack_cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let _slack_poller_handle =
-        if let (Some(slack_cfg), Some(slack_client)) = (&config.slack, state.slack.clone()) {
-            let bot_clone = bot.clone();
-            let admin_id = config.telegram.admin_user_id;
-            let interval_ms = slack_cfg.poll_interval_ms;
-            let cancelled_clone = Arc::clone(&slack_cancel_flag);
-            let logger_clone = Arc::clone(logger);
+    let _slack_poller_handle = if let (Some(slack_cfg), Some(slack_client)) =
+        (&config.slack, state.slack.clone())
+    {
+        let bot_clone = bot.clone();
+        let admin_id = config.telegram.admin_user_id;
+        let interval_ms = slack_cfg.poll_interval_ms;
+        let cancelled_clone = Arc::clone(&slack_cancel_flag);
+        let logger_clone = Arc::clone(logger);
 
-            // Known Jira project keys, used to recognize ticket mentions in forwarded
-            // Slack messages (global config + every configured per-user Jira account).
-            let mut jira_project_keys: Vec<String> = config
-                .jira
-                .as_ref()
-                .map(|j| j.project_keys.clone())
-                .unwrap_or_default();
-            for user_cfg in config.user_jira.values() {
-                jira_project_keys.extend(user_cfg.project_keys.iter().cloned());
-            }
+        // Known Jira project keys, used to recognize ticket mentions in forwarded
+        // Slack messages (global config + every configured per-user Jira account).
+        let mut jira_project_keys: Vec<String> = config
+            .jira
+            .as_ref()
+            .map(|j| j.project_keys.clone())
+            .unwrap_or_default();
+        for user_cfg in config.user_jira.values() {
+            jira_project_keys.extend(user_cfg.project_keys.iter().cloned());
+        }
 
-            let handle = tokio::spawn(async move {
-                use crate::slack::poller::{MessageHandler, SlackPoller};
+        let handle = tokio::spawn(async move {
+            use crate::slack::poller::{MessageHandler, SlackPoller};
 
-                let bot_inner = bot_clone.clone();
+            let bot_inner = bot_clone.clone();
 
-                let on_message: MessageHandler = Box::new(move |new_msg| {
-                    let bot = bot_inner.clone();
-                    let admin_id = admin_id;
-                    let jira_project_keys = jira_project_keys.clone();
-                    Box::pin(async move {
-                        let sender: Arc<dyn crate::channel::ChannelSender> =
-                            Arc::new(TelegramSender::new(bot));
-                        let chat_ids: Vec<String> =
-                            admin_id.iter().map(|id| id.to_string()).collect();
-                        crate::bot::handlers::create_slack_forward_handler(
-                            sender,
-                            chat_ids,
-                            &new_msg,
-                            &jira_project_keys,
-                        )
-                        .await
-                    })
-                });
-
-                let poller = SlackPoller::new(
-                    slack_client,
-                    interval_ms,
-                    on_message,
-                    None,
-                    Arc::clone(&logger_clone),
-                );
-                poller.start(cancelled_clone).await;
+            let on_message: MessageHandler = Box::new(move |new_msg| {
+                let bot = bot_inner.clone();
+                let admin_id = admin_id;
+                let jira_project_keys = jira_project_keys.clone();
+                Box::pin(async move {
+                    let sender: Arc<dyn crate::channel::ChannelSender> =
+                        Arc::new(TelegramSender::new(bot));
+                    let chat_ids: Vec<String> = admin_id.iter().map(|id| id.to_string()).collect();
+                    crate::bot::handlers::create_slack_forward_handler(
+                        sender,
+                        chat_ids,
+                        &new_msg,
+                        &jira_project_keys,
+                    )
+                    .await
+                })
             });
-            Some(handle)
-        } else {
-            None
-        };
+
+            let poller = SlackPoller::new(
+                slack_client,
+                interval_ms,
+                on_message,
+                None,
+                Arc::clone(&logger_clone),
+            );
+            poller.start(cancelled_clone).await;
+        });
+        Some(handle)
+    } else {
+        None
+    };
 
     let ct_slack = ct.clone();
     let cancel_flag_clone = Arc::clone(&slack_cancel_flag);
