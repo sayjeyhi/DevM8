@@ -64,9 +64,12 @@ pub fn run_wizard(existing: Option<&AppConfig>) -> Result<AppConfig, AppError> {
         },
         app,
         slack,
-        teams: None,
-        api: None,
-        user_jira: std::collections::HashMap::new(),
+        teams: existing.and_then(|c| c.teams.clone()),
+        api: existing.and_then(|c| c.api.clone()),
+        user_jira: existing.map(|c| c.user_jira.clone()).unwrap_or_default(),
+        project_ticket_templates: existing
+            .map(|c| c.project_ticket_templates.clone())
+            .unwrap_or_default(),
     })
 }
 

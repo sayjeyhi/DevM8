@@ -111,24 +111,39 @@ fn build_details_action_keyboard(issue_key: &str, back_page: usize) -> Vec<Vec<B
 
 /// Returns the subset of Jira project keys the user is allowed to see.
 /// If `project_access` is empty or a key has no entry, all allowed users can see it.
-pub fn accessible_project_keys(user_id: i64, state: &AppState) -> Vec<String> {
-    let is_admin = state.is_admin(user_id);
-    let access = state.project_access.read().unwrap();
-    let is_restricted = !is_admin && access.values().any(|ids| ids.contains(&user_id));
+///
+/// `project_access`/`is_admin` are Telegram-specific (keyed by numeric
+/// Telegram user IDs, see `config.telegram.project_access`). Non-Telegram
+/// callers (Slack, Teams, CLI) pass a `user_id` that never parses as one —
+/// their own project-access models live elsewhere (`slack_project_access`,
+/// `teams_project_access`, or nothing at all for the CLI) — so the
+/// Telegram-specific restriction simply doesn't apply to them, rather than
+/// silently keying off a bogus `0`.
+pub async fn accessible_project_keys(user_id: &str, state: &AppState) -> Vec<String> {
+    let telegram_uid: Option<i64> = user_id.parse().ok();
+    let is_admin = telegram_uid.is_some_and(|id| state.is_admin(id));
+    let is_restricted = telegram_uid.is_some_and(|id| {
+        let access = state.project_access.read().unwrap();
+        !is_admin && access.values().any(|ids| ids.contains(&id))
+    });
 
-    let jira = match state.jira_for_user(&user_id.to_string()) {
+    let jira = match state.jira_for_user(user_id).await {
         Some(j) => j,
         None => return vec![],
     };
+    let access = state.project_access.read().unwrap();
     jira.project_keys()
         .iter()
         .filter(|key| {
+            let Some(id) = telegram_uid else {
+                return true;
+            };
             if is_admin || access.is_empty() {
                 return true;
             }
             match access.get(key.as_str()) {
                 None => !is_restricted,
-                Some(ids) => ids.contains(&user_id),
+                Some(ids) => ids.contains(&id),
             }
         })
         .cloned()
@@ -145,8 +160,7 @@ pub async fn handle_my_tickets(
     user_id: &str,
     state: Arc<AppState>,
 ) -> Result<()> {
-    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-    let project_keys = accessible_project_keys(uid_i64, &state);
+    let project_keys = accessible_project_keys(user_id, &state).await;
 
     if project_keys.is_empty() {
         sender.send(chat_id, "No project keys configured.").await?;
@@ -195,7 +209,7 @@ pub async fn handle_my_tickets_project(
     let status_names: Vec<String> = if !favorite_statuses.is_empty() {
         favorite_statuses
     } else {
-        let Some(jira) = state.jira_for_user(user_id) else {
+        let Some(jira) = state.jira_for_user(user_id).await else {
             sender
                 .send(
                     chat_id,
@@ -260,7 +274,7 @@ pub async fn handle_my_tickets_status(
         "tickets: querying issues",
         Some(&json!({ "project": project_key, "status": status_filter })),
     );
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -345,7 +359,7 @@ pub async fn handle_my_tickets_page(
 
     let page_token = tokens.get(target_page).and_then(|t| t.as_deref());
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -414,7 +428,7 @@ pub async fn handle_ticket_details(
         "tickets: fetching issue details",
         Some(&json!({ "key": issue_key })),
     );
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -469,7 +483,7 @@ pub async fn handle_move_start(
     state: Arc<AppState>,
     issue_key: &str,
 ) -> Result<()> {
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -530,7 +544,7 @@ pub async fn handle_move_execute(
         "tickets: transitioning issue",
         Some(&json!({ "key": issue_key, "target_status": status })),
     );
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -609,7 +623,7 @@ pub async fn handle_ticket_ask(
         Some(&json!({ "key": issue_key })),
     );
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,

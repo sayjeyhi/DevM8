@@ -198,8 +198,7 @@ pub async fn handle_jira_action(
 
         // Step 1a: show project picker (or skip if single project)
         "jira:create" => {
-            let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-            let projects = accessible_project_keys(uid_i64, &state);
+            let projects = accessible_project_keys(user_id, &state).await;
 
             if projects.is_empty() {
                 sender.send(chat_id, "No Jira projects configured.").await?;

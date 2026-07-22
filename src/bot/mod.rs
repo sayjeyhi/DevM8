@@ -187,11 +187,27 @@ impl AppState {
     }
 
     /// Returns the per-user Jira client, or the global fallback if configured.
-    pub fn jira_for_user(&self, user_id: &str) -> Option<Arc<JiraClient>> {
-        self.user_jira_clients
-            .get(user_id)
-            .map(|c| Arc::clone(&*c))
-            .or_else(|| self.jira.as_ref().map(Arc::clone))
+    ///
+    /// Falls back through any other channel identity linked to the same
+    /// email — e.g. Jira configured via Telegram becomes usable from the
+    /// CLI, whose `user_id` is the verified email rather than a channel-native
+    /// ID. This only affects *using* an already-configured client; ownership
+    /// checks for the setup/reconnect/disconnect wizard (`has_user_jira`)
+    /// intentionally stay scoped to the caller's own identity, so disconnect
+    /// only ever touches the entry the caller actually owns.
+    pub async fn jira_for_user(&self, user_id: &str) -> Option<Arc<JiraClient>> {
+        if let Some(c) = self.user_jira_clients.get(user_id) {
+            return Some(Arc::clone(&*c));
+        }
+        if let Ok(identities) = self.db.list_channel_identities_for_email(user_id).await {
+            if let Some(c) = identities
+                .iter()
+                .find_map(|(_, external_id)| self.user_jira_clients.get(external_id))
+            {
+                return Some(Arc::clone(&*c));
+            }
+        }
+        self.jira.as_ref().map(Arc::clone)
     }
 
     pub fn has_user_jira(&self, user_id: &str) -> bool {
@@ -230,7 +246,18 @@ impl AppState {
     /// Resolve `channel`/`external_id` (e.g. "telegram"/"123456") to the devm8 user's
     /// email, auto-provisioning a placeholder user on first sight so chat history is
     /// never dropped before an admin runs `devm8 migrate-users`.
+    ///
+    /// The "cli" channel is special-cased: unlike Telegram/Slack/Teams, its
+    /// `external_id` is already the bearer-authenticated user's real, verified
+    /// email (see `AskSession::user_id` set from `AuthedUser.email` in
+    /// `src/api/routes.rs`), not an opaque platform ID needing a lookup. Routing
+    /// it through `get_or_create_user_for_channel` would mint a bogus
+    /// `cli-<email>@unmapped.devm8.local` placeholder and split CLI chat history
+    /// away from the user's real account.
     pub async fn email_for_channel_user(&self, channel: &str, external_id: &str) -> String {
+        if channel == "cli" {
+            return external_id.to_string();
+        }
         match self
             .db
             .get_or_create_user_for_channel(channel, external_id, None)

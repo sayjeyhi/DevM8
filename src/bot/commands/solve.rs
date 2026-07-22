@@ -89,7 +89,7 @@ pub async fn solve_by_key(
         .await?;
     let typing = sender.start_typing(chat_id);
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         typing.abort();
         sender
             .edit_with_keyboard(
@@ -250,7 +250,7 @@ pub async fn solve_by_key(
         "solve: posting analysis as Jira comment",
         Some(&json!({ "key": issue_key })),
     );
-    if let Some(jira) = state.jira_for_user(user_id) {
+    if let Some(jira) = state.jira_for_user(user_id).await {
         match jira.add_comment(issue_key, &analysis).await {
             Ok(()) => {
                 state
@@ -346,7 +346,7 @@ async fn grill_by_key(
         .await?;
     let _typing = sender.start_typing(chat_id);
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .edit_text(
                 &status_ref,

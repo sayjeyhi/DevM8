@@ -443,7 +443,7 @@ pub async fn handle_jira_projects_start(
 
     let thinking_ref = sender.send(chat_id, "Loading projects...").await?;
 
-    let Some(client) = state.jira_for_user(user_id) else {
+    let Some(client) = state.jira_for_user(user_id).await else {
         return Ok(());
     };
     let projects: Vec<(String, String)> = match client.get_projects().await {
@@ -643,7 +643,7 @@ pub async fn handle_jira_fav_statuses_start(
 
     let thinking_ref = sender.send(chat_id, "Loading statuses...").await?;
 
-    let Some(client) = state.jira_for_user(user_id) else {
+    let Some(client) = state.jira_for_user(user_id).await else {
         return Ok(());
     };
     let all_statuses: Vec<String> = match client.get_statuses().await {

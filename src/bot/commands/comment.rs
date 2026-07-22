@@ -34,7 +34,7 @@ pub async fn handle_comment(
         .logger
         .info("comment: adding comment", Some(&json!({ "key": &key })));
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,
@@ -86,7 +86,7 @@ pub async fn handle_pending_comment(
         Some(&json!({ "key": &issue_key })),
     );
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,

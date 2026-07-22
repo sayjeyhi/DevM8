@@ -35,7 +35,7 @@ pub async fn handle_move(
         Some(&json!({ "key": &key, "target_status": &status })),
     );
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .send(
                 chat_id,

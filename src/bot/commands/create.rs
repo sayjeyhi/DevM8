@@ -7,23 +7,49 @@ use crate::bot::state::JiraPendingAction;
 use crate::bot::AppState;
 use crate::channel::{Button, ChannelSender};
 use crate::claude::types::AskOptions;
+use crate::config::loader::load_config;
+use crate::shared::paths::PATHS;
 
-const IMPROVE_PROMPT: &str = "\
-You are a technical project manager improving a Jira ticket.
+/// Description-drafting instructions used when the project has no
+/// `project_ticket_templates` entry configured, or its file can't be read.
+const DEFAULT_DESCRIPTION_TEMPLATE: &str = "\
+Write a professional description including: brief overview, acceptance criteria as a bullet list, \
+and relevant technical notes. Generate it from the title.";
 
-Project: {project_key}
-Original title: {title}
+/// Reads the Markdown template file configured for `project_key`, if any.
+/// Relative paths resolve against the devm8 config directory.
+fn load_description_template(project_key: &str) -> Option<String> {
+    let path = load_config(None)
+        .ok()?
+        .project_ticket_templates
+        .get(project_key)?
+        .clone();
+    let path = std::path::Path::new(&path);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        PATHS.config_dir.join(path)
+    };
+    std::fs::read_to_string(&resolved).ok().map(|s| s.trim().to_string())
+}
 
-Your tasks:
-1. Correct and improve the title — fix grammar, spelling, and clarity; keep it concise (under 80 chars).
-2. Write a professional description including: brief overview, acceptance criteria as a bullet list, \
-and relevant technical notes. Generate it from the title.
+fn build_improve_prompt(project_key: &str, title: &str) -> String {
+    let template =
+        load_description_template(project_key).unwrap_or_else(|| DEFAULT_DESCRIPTION_TEMPLATE.to_string());
 
-Respond in this exact format with nothing else before or after:
-TITLE: <corrected title>
-
-DESCRIPTION:
-<description here>";
+    format!(
+        "You are a technical project manager improving a Jira ticket.\n\n\
+         Project: {project_key}\n\
+         Original title: {title}\n\n\
+         Your tasks:\n\
+         1. Correct and improve the title — fix grammar, spelling, and clarity; keep it concise (under 80 chars).\n\
+         2. {template}\n\n\
+         Respond in this exact format with nothing else before or after:\n\
+         TITLE: <corrected title>\n\n\
+         DESCRIPTION:\n\
+         <description here>"
+    )
+}
 
 fn parse_claude_response(response: &str) -> (String, String) {
     let title = response
@@ -65,9 +91,7 @@ pub async fn handle_create_suggest(
         .await?;
     let _typing = sender.start_typing(chat_id);
 
-    let prompt = IMPROVE_PROMPT
-        .replace("{project_key}", &project_key)
-        .replace("{title}", &title);
+    let prompt = build_improve_prompt(&project_key, &title);
 
     let claude_output = match state.ai.ask(&prompt, AskOptions::default()).await {
         Ok((text, _)) => text,
@@ -138,7 +162,7 @@ pub async fn handle_create_confirm(
 
     let thinking_ref = sender.send(chat_id, "Creating issue...").await?;
 
-    let Some(jira) = state.jira_for_user(user_id) else {
+    let Some(jira) = state.jira_for_user(user_id).await else {
         sender
             .edit_text(
                 &thinking_ref,

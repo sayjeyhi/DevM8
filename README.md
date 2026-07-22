@@ -201,6 +201,16 @@ email        = "you@example.com"
 api_token    = "YOUR_JIRA_API_TOKEN"
 project_keys = ["PROJ", "BZ"]
 
+# Per-project ticket description templates for /jira -> Create Ticket.
+# Value is a path to a Markdown file with the instructions Claude follows
+# when drafting a description (e.g. a bug-report skeleton with "Steps to
+# Reproduce" / "Expected vs Actual" sections). Relative paths resolve
+# against ~/.config/devm8. Projects with no entry, or an unreadable file,
+# fall back to the built-in default instructions.
+[project_ticket_templates]
+PROJ = "templates/proj-bug.md"
+BZ   = "/absolute/path/to/bz-template.md"
+
 [claude]
 binary_path = "/usr/local/bin/claude"
 # api_key = "sk-ant-..."   # optional if already authenticated via `claude login`

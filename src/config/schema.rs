@@ -284,4 +284,15 @@ pub struct AppConfig {
     /// devm8 email (for devm8-client's CLI-native setup), as a string.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub user_jira: HashMap<String, UserJiraConfig>,
+
+    /// Per-project Jira ticket description template. Key is the project key
+    /// (e.g. "ENG"). Value is a path to a Markdown file whose contents are
+    /// the instructions Claude follows when drafting a description in
+    /// `/jira → Create Ticket` (step 2 of the improve prompt) — e.g. a
+    /// bug-report skeleton with "Steps to Reproduce" / "Expected vs Actual"
+    /// sections. Relative paths resolve against the devm8 config directory
+    /// (`~/.config/devm8`). Projects with no entry, or whose file can't be
+    /// read, use the built-in default instructions.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub project_ticket_templates: HashMap<String, String>,
 }
