@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use devm8::api::protocol::{
     AskEvent, AskRequest, MeResponse, PairRequest, PairResponse, ProjectDto, SolveRequest,
 };
+use url::Url;
 
 use config::Credentials;
 
@@ -77,7 +78,10 @@ enum HistoryAction {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("devm8-client: {e}");
+        // `{:#}` walks the full error chain (context + underlying reqwest/io
+        // error), not just the top-level message — e.g. "failed to reach
+        // ...: error sending request ...: connection refused".
+        eprintln!("devm8-client: {e:#}");
         std::process::exit(1);
     }
 }
@@ -108,6 +112,7 @@ async fn run() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn login(server: String, code: String, label: Option<String>) -> Result<()> {
+    let server = validate_server_url(&server)?;
     let label = label.or_else(sysinfo::System::host_name);
 
     let client = reqwest::Client::new();
@@ -116,7 +121,12 @@ async fn login(server: String, code: String, label: Option<String>) -> Result<()
         .json(&PairRequest { code, label })
         .send()
         .await
-        .context("failed to reach server")?;
+        .with_context(|| {
+            format!(
+                "failed to reach {server} — is the devm8 API server running \
+                 and reachable from this machine (e.g. over your Tailscale tailnet)?"
+            )
+        })?;
 
     if !resp.status().is_success() {
         bail!(
@@ -135,6 +145,65 @@ async fn login(server: String, code: String, label: Option<String>) -> Result<()
 
     println!("Logged in as {}.", pair.email);
     Ok(())
+}
+
+/// Validate and normalize a `--server` URL, catching the common mistakes
+/// (missing scheme, missing port) with a specific message before ever
+/// touching the network, rather than surfacing a bare connection error.
+fn validate_server_url(raw: &str) -> Result<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        bail!("--server must not be empty");
+    }
+
+    let url = Url::parse(trimmed).with_context(|| {
+        format!(
+            "'{trimmed}' is not a valid URL — expected something like \
+             https://myserver.tailnet-name.ts.net:7887"
+        )
+    })?;
+
+    if url.scheme() != "http" && url.scheme() != "https" {
+        bail!(
+            "server URL must start with http:// or https:// — got '{trimmed}' \
+             (parsed scheme: '{}')",
+            url.scheme()
+        );
+    }
+
+    match url.host_str() {
+        Some(h) if !h.is_empty() => {}
+        _ => bail!("server URL is missing a host — got '{trimmed}'"),
+    }
+
+    if !has_explicit_port(trimmed) {
+        bail!(
+            "server URL must include an explicit port — got '{trimmed}'.\n\
+             The devm8 API server has no default port (commonly 7887 — check \
+             the [api] port in the server's config.toml), e.g.:\n\
+             \n  https://myserver.tailnet-name.ts.net:7887"
+        );
+    }
+
+    Ok(trimmed.to_string())
+}
+
+/// Whether the URL's authority section has an explicit `:port` suffix.
+/// Checked against the raw string rather than the parsed `Url`, which
+/// silently drops a port that matches the scheme's default (e.g. an
+/// explicit `:443` on `https://` normalizes away and `Url::port()` would
+/// return `None` for it too).
+fn has_explicit_port(raw: &str) -> bool {
+    let after_scheme = raw.split_once("://").map(|(_, rest)| rest).unwrap_or(raw);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, hp)| hp)
+        .unwrap_or(authority);
+    match host_port.rsplit_once(':') {
+        Some((_, port)) => !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
 }
 
 async fn logout() -> Result<()> {
@@ -387,5 +456,58 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", s.chars().take(max).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_valid_url_with_port() {
+        let result = validate_server_url("https://myserver.tailnet-name.ts.net:7887").unwrap();
+        assert_eq!(result, "https://myserver.tailnet-name.ts.net:7887");
+    }
+
+    #[test]
+    fn strips_trailing_slash() {
+        let result = validate_server_url("https://myserver.tailnet-name.ts.net:7887/").unwrap();
+        assert_eq!(result, "https://myserver.tailnet-name.ts.net:7887");
+    }
+
+    #[test]
+    fn accepts_ipv6_with_port() {
+        let result = validate_server_url("http://[::1]:7887").unwrap();
+        assert_eq!(result, "http://[::1]:7887");
+    }
+
+    #[test]
+    fn rejects_missing_scheme() {
+        let err = validate_server_url("myserver.tailnet-name.ts.net:7887").unwrap_err();
+        assert!(err.to_string().contains("not a valid URL") || err.to_string().contains("http"));
+    }
+
+    #[test]
+    fn rejects_non_http_scheme() {
+        let err = validate_server_url("ftp://myserver:7887").unwrap_err();
+        assert!(err.to_string().contains("http:// or https://"));
+    }
+
+    #[test]
+    fn rejects_missing_port() {
+        let err = validate_server_url("https://myserver.tailnet-name.ts.net").unwrap_err();
+        assert!(err.to_string().contains("explicit port"));
+    }
+
+    #[test]
+    fn rejects_ipv6_without_port() {
+        let err = validate_server_url("http://[::1]").unwrap_err();
+        assert!(err.to_string().contains("explicit port"));
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(validate_server_url("").is_err());
+        assert!(validate_server_url("   ").is_err());
     }
 }
