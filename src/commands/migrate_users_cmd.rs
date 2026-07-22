@@ -195,7 +195,11 @@ async fn ensure_api_server_running(config: &AppConfig) -> ApiReadiness {
             .and_then(|p| std::fs::canonicalize(p).ok())
             .unwrap_or_else(|| PathBuf::from("devm8"));
 
-        match tokio::process::Command::new(&exe).arg("start").status().await {
+        match tokio::process::Command::new(&exe)
+            .arg("start")
+            .status()
+            .await
+        {
             Ok(s) if s.success() => status = agent_status().await,
             Ok(s) => {
                 append_to_log_file(
@@ -274,7 +278,9 @@ async fn ensure_api_server_running(config: &AppConfig) -> ApiReadiness {
             Some(&json!({ "pid": pid, "addr": addr, "tailscale": tailscale_addr })),
         );
         ApiReadiness {
-            status_line: format!("Server: running (PID {pid}), API listening on {addr}.{tailscale_note}"),
+            status_line: format!(
+                "Server: running (PID {pid}), API listening on {addr}.{tailscale_note}"
+            ),
             server_url: server_url.unwrap_or_else(|| "<your-server-url>".to_string()),
         }
     } else {

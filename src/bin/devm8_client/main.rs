@@ -6,7 +6,8 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use devm8::api::protocol::{
-    AskEvent, AskRequest, MeResponse, PairRequest, PairResponse, ProjectDto, SolveRequest,
+    AskEvent, AskRequest, MeResponse, PairRequest, PairResponse, PrReviewRequest, ProjectDto,
+    SolveRequest,
 };
 use url::Url;
 
@@ -56,6 +57,12 @@ enum Cmd {
     /// Run the /solve analysis flow for a Jira issue
     Solve { issue_key: String },
 
+    /// Review a GitHub pull request with Claude and list its comments
+    PrReview {
+        /// The pull request URL, e.g. https://github.com/org/repo/pull/123
+        url: String,
+    },
+
     /// Open the Jira menu (My Tickets, Create, Move, Comment, Solve, account setup)
     Jira,
 
@@ -101,6 +108,7 @@ async fn run() -> Result<()> {
         Cmd::Projects => projects().await,
         Cmd::Ask { question } => ask(question).await,
         Cmd::Solve { issue_key } => solve(issue_key).await,
+        Cmd::PrReview { url } => pr_review(url).await,
         Cmd::Jira => jira().await,
         Cmd::History { action, limit } => history(action, limit).await,
         Cmd::Update => update().await,
@@ -467,6 +475,60 @@ async fn solve(issue_key: String) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// PR review — streams Claude's review of a GitHub PR, then lets the user pick
+// numbered comments to view in full. Selection only ever prints locally;
+// nothing is posted back to GitHub.
+// ---------------------------------------------------------------------------
+
+async fn pr_review(url: String) -> Result<()> {
+    let creds = config::load()?;
+    let client = authed_client(&creds)?;
+    let mut pending = stream_and_render(
+        &client,
+        format!("{}/v1/pr-review", creds.server),
+        PrReviewRequest { url },
+    )
+    .await?;
+
+    while let Some(PendingChoices(ref data)) = pending {
+        if data.is_empty() {
+            break;
+        }
+
+        print!("> ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(idx) = line.parse::<usize>() else {
+            println!("Enter a number to view a comment, or Ctrl-D to exit.");
+            continue;
+        };
+        if idx < 1 || idx > data.len() {
+            println!(
+                "Invalid selection — enter a number between 1 and {}.",
+                data.len()
+            );
+            continue;
+        }
+
+        let action = data[idx - 1].clone();
+        pending = stream_and_render(
+            &client,
+            format!("{}/v1/action", creds.server),
+            devm8::api::protocol::ActionRequest { action },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Jira (My Tickets, Create, Move, Comment, Solve, account setup) — opens the
 // same menu Telegram's /jira command shows, driven by the same numbered-choice
 // action loop as `ask`. No upfront project selection: multi-project accounts
@@ -496,7 +558,10 @@ async fn history(action: Option<HistoryAction>, limit: i64) -> Result<()> {
     match action {
         None => {
             let project = select_project(&client, &creds).await?;
-            let url = format!("{}/v1/history?limit={limit}&project={project}", creds.server);
+            let url = format!(
+                "{}/v1/history?limit={limit}&project={project}",
+                creds.server
+            );
             let sessions: Vec<devm8::api::protocol::SessionSummaryDto> = client
                 .get(url)
                 .send()

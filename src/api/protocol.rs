@@ -88,6 +88,11 @@ pub struct SolveRequest {
     pub issue_key: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrReviewRequest {
+    pub url: String,
+}
+
 /// A button's `data` string, sent back exactly as a Telegram callback_data
 /// payload would be (e.g. "ask:cancel", "solve:repo:PROJ-1:0").
 #[derive(Debug, Clone, Serialize, Deserialize)]

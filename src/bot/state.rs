@@ -185,6 +185,20 @@ pub struct PendingGrill {
 }
 
 // ---------------------------------------------------------------------------
+// PR review — one comment surfaced by Claude's review of a GitHub PR diff
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PrReviewComment {
+    pub file: String,
+    #[serde(default)]
+    pub line: Option<i64>,
+    pub severity: String,
+    pub title: String,
+    pub body: String,
+}
+
+// ---------------------------------------------------------------------------
 // Post-analysis implement button state
 // ---------------------------------------------------------------------------
 
@@ -297,6 +311,9 @@ pub struct ChatState {
 
     /// Waiting for user to type input for a Jira panel action
     pub pending_jira_action: Option<JiraPendingAction>,
+
+    /// Comments from the last `pr-review` run, selectable for detail view
+    pub pending_pr_review: Option<Vec<PrReviewComment>>,
 
     /// Active cancellation token for an in-flight AI request; cancel() aborts it.
     pub cancel_token: Option<CancellationToken>,

@@ -12,6 +12,7 @@ pub mod logs;
 pub mod move_cmd;
 pub mod my_tickets;
 pub mod permissions;
+pub mod pr_review;
 pub mod solve;
 pub mod status;
 
@@ -35,6 +36,7 @@ pub use permissions::{
     handle_permissions_revoke, handle_permissions_toggle, handle_permissions_user_input,
     handle_permissions_user_select,
 };
+pub use pr_review::{handle_pr_review_action, start_pr_review};
 pub use solve::{
     handle_grill_answer, handle_post_analysis_implement, handle_solve,
     handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,

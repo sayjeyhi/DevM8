@@ -19,6 +19,7 @@ use crate::bot::commands::solve::{
 use crate::bot::commands::{
     ask_with_session, handle_ask_session_callback, handle_jira, handle_jira_action,
     handle_jira_input_with_text, handle_my_tickets_callback, handle_pending_comment,
+    handle_pr_review_action, start_pr_review,
 };
 use crate::bot::state::AskSession;
 use crate::bot::AppState;
@@ -36,6 +37,7 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/projects", get(projects))
         .route("/v1/ask", post(ask))
         .route("/v1/solve", post(solve))
+        .route("/v1/pr-review", post(pr_review))
         .route("/v1/jira/start", post(jira_start))
         .route("/v1/action", post(action))
         .route("/v1/history", get(list_history))
@@ -293,6 +295,35 @@ async fn solve(
 }
 
 // ---------------------------------------------------------------------------
+// PR review (SSE)
+// ---------------------------------------------------------------------------
+
+async fn pr_review(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthedUser>,
+    Json(req): Json<PrReviewRequest>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let chat_id = format!("cli:{}", user.email);
+    let app_state = Arc::clone(&state.app_state);
+
+    let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
+    let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
+    let url = req.url.clone();
+
+    tokio::spawn(async move {
+        let result = start_pr_review(sender, &chat_id, app_state, &url).await;
+        let _ = match result {
+            Ok(()) => tx.send(AskEvent::Done),
+            Err(e) => tx.send(AskEvent::Error {
+                message: e.to_string(),
+            }),
+        };
+    });
+
+    Sse::new(to_sse_stream(rx)).keep_alive(KeepAlive::default())
+}
+
+// ---------------------------------------------------------------------------
 // Jira (SSE) — opens the same top-level menu Telegram's /jira command shows
 // ---------------------------------------------------------------------------
 
@@ -357,6 +388,9 @@ async fn action(
                 .await
             }
             "solve" => route_solve_action(sender, &chat_id, &email, &action_data, app_state).await,
+            "prreview" => {
+                handle_pr_review_action(sender, &chat_id, &action_data, app_state).await
+            }
             "jira" => {
                 handle_jira_action(sender, &chat_id, &email, &action_data, None, app_state).await
             }
