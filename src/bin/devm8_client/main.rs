@@ -51,19 +51,18 @@ enum Cmd {
     Ask {
         /// The question to ask. If omitted, starts an interactive session.
         question: Vec<String>,
-        #[arg(long)]
-        project: Option<String>,
     },
 
     /// Run the /solve analysis flow for a Jira issue
     Solve { issue_key: String },
 
+    /// Open the Jira menu (My Tickets, Create, Move, Comment, Solve, account setup)
+    Jira,
+
     /// Browse persisted chat history
     History {
         #[command(subcommand)]
         action: Option<HistoryAction>,
-        #[arg(long)]
-        project: Option<String>,
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
@@ -100,13 +99,10 @@ async fn run() -> Result<()> {
         Cmd::Logout => logout().await,
         Cmd::Whoami => whoami().await,
         Cmd::Projects => projects().await,
-        Cmd::Ask { question, project } => ask(question, project).await,
+        Cmd::Ask { question } => ask(question).await,
         Cmd::Solve { issue_key } => solve(issue_key).await,
-        Cmd::History {
-            action,
-            project,
-            limit,
-        } => history(action, project, limit).await,
+        Cmd::Jira => jira().await,
+        Cmd::History { action, limit } => history(action, limit).await,
         Cmd::Update => update().await,
     }
 }
@@ -251,13 +247,7 @@ async fn whoami() -> Result<()> {
 async fn projects() -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
-    let projects: Vec<ProjectDto> = client
-        .get(format!("{}/v1/projects", creds.server))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let projects = fetch_projects(&client, &creds).await?;
     for p in projects {
         println!(
             "{}{}{}",
@@ -267,6 +257,55 @@ async fn projects() -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn fetch_projects(client: &reqwest::Client, creds: &Credentials) -> Result<Vec<ProjectDto>> {
+    let projects: Vec<ProjectDto> = client
+        .get(format!("{}/v1/projects", creds.server))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(projects)
+}
+
+/// Prompt the user to pick one of their accessible projects, returning its key.
+/// Used by `ask` and `history` so every session works within an explicit project.
+async fn select_project(client: &reqwest::Client, creds: &Credentials) -> Result<String> {
+    let projects = fetch_projects(client, creds).await?;
+    if projects.is_empty() {
+        bail!("no accessible projects — ask an admin to configure one");
+    }
+
+    println!("Select a project:");
+    for (i, p) in projects.iter().enumerate() {
+        println!(
+            "  [{}] {}{}{}",
+            i + 1,
+            p.key,
+            if p.has_git { " [git]" } else { "" },
+            if p.has_jira { " [jira]" } else { "" }
+        );
+    }
+
+    loop {
+        print!("> ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            bail!("no project selected");
+        }
+        if let Ok(idx) = line.trim().parse::<usize>() {
+            if idx >= 1 && idx <= projects.len() {
+                return Ok(projects[idx - 1].key.clone());
+            }
+        }
+        println!(
+            "Invalid selection — enter a number between 1 and {}.",
+            projects.len()
+        );
+    }
 }
 
 fn authed_client(creds: &Credentials) -> Result<reqwest::Client> {
@@ -341,23 +380,40 @@ async fn stream_and_render(
     Ok(last_choices)
 }
 
-async fn ask(question: Vec<String>, project: Option<String>) -> Result<()> {
+async fn ask(question: Vec<String>) -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
+    let project = select_project(&client, &creds).await?;
     let question = question.join(" ");
 
     if !question.is_empty() {
         stream_and_render(
             &client,
             format!("{}/v1/ask", creds.server),
-            AskRequest { question, project },
+            AskRequest {
+                question,
+                project: Some(project),
+            },
         )
         .await?;
         return Ok(());
     }
 
     println!("Interactive session — Ctrl-D to exit.");
-    let mut pending: Option<PendingChoices> = None;
+    interactive_loop(&client, &creds, Some(project), None).await
+}
+
+/// Reads lines from stdin until EOF, dispatching each one either as a numeric
+/// choice (posted to `/v1/action`, when `pending` holds choices from the last
+/// response) or as free text (posted to `/v1/ask`). Shared by `ask`'s
+/// interactive session and `jira`'s menu — both are driven by the same
+/// SSE + numbered-choice protocol.
+async fn interactive_loop(
+    client: &reqwest::Client,
+    creds: &Credentials,
+    project: Option<String>,
+    mut pending: Option<PendingChoices>,
+) -> Result<()> {
     loop {
         print!("> ");
         std::io::stdout().flush().ok();
@@ -375,7 +431,7 @@ async fn ask(question: Vec<String>, project: Option<String>) -> Result<()> {
                 if idx >= 1 && idx <= data.len() {
                     let action = data[idx - 1].clone();
                     pending = stream_and_render(
-                        &client,
+                        client,
                         format!("{}/v1/action", creds.server),
                         devm8::api::protocol::ActionRequest { action },
                     )
@@ -386,7 +442,7 @@ async fn ask(question: Vec<String>, project: Option<String>) -> Result<()> {
         }
 
         pending = stream_and_render(
-            &client,
+            client,
             format!("{}/v1/ask", creds.server),
             AskRequest {
                 question: line,
@@ -411,19 +467,36 @@ async fn solve(issue_key: String) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Jira (My Tickets, Create, Move, Comment, Solve, account setup) — opens the
+// same menu Telegram's /jira command shows, driven by the same numbered-choice
+// action loop as `ask`. No upfront project selection: multi-project accounts
+// get a picker from the menu itself, exactly as they would in Telegram.
+// ---------------------------------------------------------------------------
+
+async fn jira() -> Result<()> {
+    let creds = config::load()?;
+    let client = authed_client(&creds)?;
+    let pending = stream_and_render(
+        &client,
+        format!("{}/v1/jira/start", creds.server),
+        serde_json::json!({}),
+    )
+    .await?;
+    interactive_loop(&client, &creds, None, pending).await
+}
+
+// ---------------------------------------------------------------------------
 // History
 // ---------------------------------------------------------------------------
 
-async fn history(action: Option<HistoryAction>, project: Option<String>, limit: i64) -> Result<()> {
+async fn history(action: Option<HistoryAction>, limit: i64) -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
 
     match action {
         None => {
-            let mut url = format!("{}/v1/history?limit={limit}", creds.server);
-            if let Some(p) = &project {
-                url.push_str(&format!("&project={p}"));
-            }
+            let project = select_project(&client, &creds).await?;
+            let url = format!("{}/v1/history?limit={limit}&project={project}", creds.server);
             let sessions: Vec<devm8::api::protocol::SessionSummaryDto> = client
                 .get(url)
                 .send()

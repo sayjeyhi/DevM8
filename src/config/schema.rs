@@ -41,7 +41,7 @@ pub struct JiraConfig {
 }
 
 /// Per-user Jira credentials.
-/// TOML key: [user_jira.<telegram_user_id>]
+/// TOML key: [user_jira.<telegram_user_id_or_email>]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserJiraConfig {
     pub base_url: String,
@@ -280,7 +280,8 @@ pub struct AppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiConfig>,
 
-    /// Per-user Jira credential overrides. Key is Telegram user_id as a string.
+    /// Per-user Jira credential overrides. Key is a Telegram user_id or a
+    /// devm8 email (for devm8-client's CLI-native setup), as a string.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub user_jira: HashMap<String, UserJiraConfig>,
 }

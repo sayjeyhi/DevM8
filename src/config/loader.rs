@@ -89,18 +89,21 @@ pub fn write_config(config: &AppConfig, config_path: Option<&Path>) -> Result<()
 
 /// Atomically update (or remove) a single user's Jira credentials.
 ///
+/// `user_key` is either a stringified Telegram user ID (Telegram/Slack/Teams
+/// setup flows) or a devm8 email (CLI setup flow) — the storage is a plain
+/// `HashMap<String, UserJiraConfig>`, so any stable per-user string works.
+///
 /// Holds `CONFIG_WRITE_LOCK` for the entire read → mutate → write cycle so
-/// concurrent calls from different Telegram handlers cannot race each other.
-pub fn update_user_jira(user_id: i64, cfg: Option<&UserJiraConfig>) -> Result<(), AppError> {
+/// concurrent calls from different channel handlers cannot race each other.
+pub fn update_user_jira(user_key: &str, cfg: Option<&UserJiraConfig>) -> Result<(), AppError> {
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut config = load_config(None)?;
-    let key = user_id.to_string();
     match cfg {
         Some(c) => {
-            config.user_jira.insert(key, c.clone());
+            config.user_jira.insert(user_key.to_string(), c.clone());
         }
         None => {
-            config.user_jira.remove(&key);
+            config.user_jira.remove(user_key);
         }
     }
     write_config(&config, None)

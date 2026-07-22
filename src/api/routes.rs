@@ -16,7 +16,10 @@ use crate::bot::commands::solve::{
     handle_branch_choice, handle_post_analysis_implement, handle_solve_action_callback,
     handle_solve_repo_callback, solve_by_key,
 };
-use crate::bot::commands::{ask_with_session, handle_ask_session_callback};
+use crate::bot::commands::{
+    ask_with_session, handle_ask_session_callback, handle_jira, handle_jira_action,
+    handle_jira_input_with_text, handle_my_tickets_callback, handle_pending_comment,
+};
 use crate::bot::state::AskSession;
 use crate::bot::AppState;
 use crate::channel::ChannelSender;
@@ -33,6 +36,7 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/projects", get(projects))
         .route("/v1/ask", post(ask))
         .route("/v1/solve", post(solve))
+        .route("/v1/jira/start", post(jira_start))
         .route("/v1/action", post(action))
         .route("/v1/history", get(list_history))
         .route("/v1/history/:session_id", get(get_history))
@@ -150,6 +154,57 @@ async fn ask(
     let chat_id = format!("cli:{}", user.email);
     let app_state = Arc::clone(&state.app_state);
 
+    // A Jira flow (setup wizard step, create/move/comment/solve prompt, or a
+    // ticket-details "Comment" follow-up) is waiting for free text — route
+    // there instead of into the ask session, mirroring the same
+    // pending_jira_action/pending_comment priority checks polling.rs applies
+    // to incoming Telegram messages.
+    let pending_jira = app_state
+        .chat_states
+        .get(&chat_id)
+        .and_then(|s| s.pending_jira_action.clone());
+    let pending_comment = if pending_jira.is_none() {
+        app_state
+            .chat_states
+            .get(&chat_id)
+            .and_then(|s| s.pending_comment.clone())
+    } else {
+        None
+    };
+
+    if pending_jira.is_some() || pending_comment.is_some() {
+        let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
+        let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
+        let email = user.email.clone();
+        let text = req.question.clone();
+
+        tokio::spawn(async move {
+            let result = if let Some(action) = pending_jira {
+                handle_jira_input_with_text(
+                    sender,
+                    &chat_id,
+                    &email,
+                    action,
+                    |_pk: &str| true,
+                    app_state,
+                    text,
+                )
+                .await
+            } else {
+                let (issue_key,) = pending_comment.unwrap();
+                handle_pending_comment(sender, &chat_id, &email, &text, app_state, issue_key).await
+            };
+            let _ = match result {
+                Ok(()) => tx.send(AskEvent::Done),
+                Err(e) => tx.send(AskEvent::Error {
+                    message: e.to_string(),
+                }),
+            };
+        });
+
+        return Sse::new(to_sse_stream(rx)).keep_alive(KeepAlive::default());
+    }
+
     // Seed a session on first use so `AskSession.user_id` is the caller's email
     // (not left to `ask_with_session`'s empty-string default), optionally
     // scoped to a project's repo — mirrors how Telegram primes `AskSession`
@@ -238,14 +293,42 @@ async fn solve(
 }
 
 // ---------------------------------------------------------------------------
+// Jira (SSE) — opens the same top-level menu Telegram's /jira command shows
+// ---------------------------------------------------------------------------
+
+async fn jira_start(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthedUser>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let chat_id = format!("cli:{}", user.email);
+    let app_state = Arc::clone(&state.app_state);
+
+    let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
+    let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
+    let email = user.email.clone();
+
+    tokio::spawn(async move {
+        let result = handle_jira(sender, &chat_id, &email, app_state).await;
+        let _ = match result {
+            Ok(()) => tx.send(AskEvent::Done),
+            Err(e) => tx.send(AskEvent::Error {
+                message: e.to_string(),
+            }),
+        };
+    });
+
+    Sse::new(to_sse_stream(rx)).keep_alive(KeepAlive::default())
+}
+
+// ---------------------------------------------------------------------------
 // Action (button-click follow-ups: cancel, repo/branch pickers, "implement", ...)
 // ---------------------------------------------------------------------------
 
 /// Routes a button's `data` string exactly as Telegram/Slack/Teams would route
 /// a callback query — the CLI has no native buttons, so the client sends the
-/// chosen choice's `data` back here instead of as free text. Only "ask:*" and
-/// "solve:*" prefixes are handled in v1 (matches the ask/solve-only scope);
-/// jira/admin/tickets button flows are out of scope for the CLI for now.
+/// chosen choice's `data` back here instead of as free text. "ask:*", "solve:*",
+/// "jira:*", and "tickets:*" prefixes are handled; admin/permissions button
+/// flows remain Telegram/Slack/Teams-only.
 async fn action(
     State(state): State<ApiState>,
     Extension(user): Extension<AuthedUser>,
@@ -274,6 +357,12 @@ async fn action(
                 .await
             }
             "solve" => route_solve_action(sender, &chat_id, &email, &action_data, app_state).await,
+            "jira" => {
+                handle_jira_action(sender, &chat_id, &email, &action_data, None, app_state).await
+            }
+            "tickets" => {
+                handle_my_tickets_callback(sender, &chat_id, &email, &action_data, app_state).await
+            }
             other => Err(anyhow::anyhow!(
                 "unsupported action prefix for devm8-client: {other}"
             )),

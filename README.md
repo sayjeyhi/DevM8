@@ -155,18 +155,21 @@ devm8-client login --server <url> --code <pairing-code>   # pair this machine
 devm8-client logout                                        # forget stored credentials
 devm8-client whoami                                         # show the logged-in identity
 devm8-client projects                                       # list accessible projects
-devm8-client ask [--project KEY] [QUESTION...]               # ask Claude (interactive if no question given)
+devm8-client ask [QUESTION...]                              # pick a project, then ask Claude (interactive if no question given)
 devm8-client solve <ISSUE-KEY>                              # run the /solve analysis flow
-devm8-client history [--project KEY] [--limit N]            # list past sessions
+devm8-client jira                                           # open the Jira menu (tickets, create, move, comment, account setup)
+devm8-client history [--limit N]                            # pick a project, then list its past sessions
 devm8-client history show <SESSION_ID>                      # show a session's full transcript
 ```
 
-Running `devm8-client ask` with no question starts an interactive REPL — Ctrl-D to exit. When a response includes follow-up choices (branch/commit picker, cancel, etc.), they're printed as a numbered list; type the number to select one.
+Running `devm8-client ask` with no question starts an interactive REPL — Ctrl-D to exit. When a response includes follow-up choices (branch/commit picker, cancel, etc.), they're printed as a numbered list; type the number to select one. `devm8-client jira` uses this same numbered-choice loop to drive the same menu Telegram's `/jira` command shows: My Tickets, Create Ticket, Move Ticket, Add Comment, Solve Ticket, and account settings (connect/reconnect/disconnect a personal Jira account, manage its accessible projects, and pick favorite statuses).
+
+Both `ask` and `history` (the listing form) prompt you to pick a project from your accessible projects before doing anything else.
 
 ### Notes
 
-- v1 scope covers `ask`, `solve`, and `history` only — Jira ticket creation/comment/move and admin/permissions management are still Telegram/Slack/Teams-only.
-- A CLI-only user (paired via email but never set up in Telegram/Slack/Teams) can use `ask`/`history` right away, but needs a Jira account configured through one of the chat channels before `solve` will work.
+- v1 scope covers `ask`, `solve`, `jira`, and `history`.
+- A CLI-only user (paired via email but never set up in Telegram/Slack/Teams) can connect their own Jira account directly from `devm8-client jira` → Settings, or reuse one already configured through a chat channel — either way, the same personal Jira credentials work across all channels.
 - Chat history is shared across all channels — a `/solve` run from Telegram shows up in `devm8-client history` too, and vice versa.
 
 ## Config File

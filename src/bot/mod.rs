@@ -247,10 +247,15 @@ impl AppState {
         }
     }
 
-    /// The Jira client for `email`, if any channel identity mapped to it has one configured.
-    /// Wired up by the API server (M2) for CLI-originated `/solve` requests.
+    /// The Jira client for `email` — checks for a CLI-native account keyed directly
+    /// by email first (set up via devm8-client's own Jira setup wizard), then falls
+    /// back to any Telegram/Slack/Teams identity mapped to this email that has one
+    /// configured.
     #[allow(dead_code)]
     pub async fn jira_for_email(&self, email: &str) -> Option<Arc<JiraClient>> {
+        if let Some(c) = self.user_jira_clients.get(email) {
+            return Some(Arc::clone(&*c));
+        }
         let identities = self
             .db
             .list_channel_identities_for_email(email)

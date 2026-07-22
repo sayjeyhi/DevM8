@@ -201,8 +201,7 @@ pub async fn handle_jira_setup_input(
                             project_keys: vec![],
                             favorite_statuses: vec![],
                         };
-                        let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-                        if let Err(e) = update_user_jira(uid_i64, Some(&cfg)) {
+                        if let Err(e) = update_user_jira(user_id, Some(&cfg)) {
                             state.remove_user_jira(user_id);
                             sender
                                 .send(chat_id, &format!("\u{274c} Could not save config: {e}"))
@@ -335,8 +334,7 @@ pub async fn handle_jira_setup_project_done(
         return Ok(());
     }
 
-    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-    if let Err(e) = update_user_jira(uid_i64, Some(&cfg)) {
+    if let Err(e) = update_user_jira(user_id, Some(&cfg)) {
         state.remove_user_jira(user_id);
         sender
             .edit_text(&msg_ref, &format!("\u{274c} Could not save config: {e}"))
@@ -367,8 +365,7 @@ pub async fn handle_jira_clear(
     user_id: &str,
 ) -> Result<()> {
     state.remove_user_jira(user_id);
-    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-    if let Err(e) = update_user_jira(uid_i64, None) {
+    if let Err(e) = update_user_jira(user_id, None) {
         sender
             .send(chat_id, &format!("\u{274c} Could not update config: {e}"))
             .await?;
@@ -582,8 +579,7 @@ pub async fn handle_jira_manage_project_done(
         return Ok(());
     }
 
-    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-    if let Err(e) = update_user_jira(uid_i64, Some(&updated)) {
+    if let Err(e) = update_user_jira(user_id, Some(&updated)) {
         sender
             .edit_text(&msg_ref, &format!("\u{274c} Could not save config: {e}"))
             .await?;
@@ -781,8 +777,7 @@ pub async fn handle_jira_fav_status_done(
         ..existing
     };
 
-    let uid_i64 = user_id.parse::<i64>().unwrap_or(0);
-    if let Err(e) = update_user_jira(uid_i64, Some(&updated)) {
+    if let Err(e) = update_user_jira(user_id, Some(&updated)) {
         sender
             .edit_text(&msg_ref, &format!("\u{274c} Could not save config: {e}"))
             .await?;
