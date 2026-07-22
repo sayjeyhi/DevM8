@@ -67,6 +67,9 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+
+    /// Check for and apply devm8-client binary updates
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -104,7 +107,13 @@ async fn run() -> Result<()> {
             project,
             limit,
         } => history(action, project, limit).await,
+        Cmd::Update => update().await,
     }
+}
+
+async fn update() -> Result<()> {
+    devm8::commands::client_update_command().await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

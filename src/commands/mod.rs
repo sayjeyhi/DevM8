@@ -20,4 +20,4 @@ pub use slackmap_cmd::slackmap_command;
 pub use start_cmd::start_command;
 pub use status_cmd::status_command;
 pub use stop_cmd::stop_command;
-pub use update_cmd::update_command;
+pub use update_cmd::{client_update_command, update_command};

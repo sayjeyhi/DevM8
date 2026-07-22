@@ -13,13 +13,16 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Binary naming
 // ---------------------------------------------------------------------------
 
-fn binary_name() -> Option<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => Some("devm8-macos-arm64"),
-        ("macos", "x86_64") => Some("devm8-macos-x64"),
-        ("linux", "x86_64") => Some("devm8-linux-x64"),
-        _ => None,
-    }
+/// Release artifact name for `prefix` ("devm8" or "devm8-client") on the
+/// current platform, matching the naming scheme in `.github/workflows/release.yml`.
+fn binary_name_for(prefix: &str) -> Option<String> {
+    let suffix = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-arm64",
+        ("macos", "x86_64") => "macos-x64",
+        ("linux", "x86_64") => "linux-x64",
+        _ => return None,
+    };
+    Some(format!("{prefix}-{suffix}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -102,22 +105,35 @@ async fn verify_sha256(data: &[u8], checksums_text: &str, filename: &str) -> any
 }
 
 // ---------------------------------------------------------------------------
-// Public command
+// Public commands
 // ---------------------------------------------------------------------------
 
+/// Update the `devm8` daemon binary — stops the running service (if any)
+/// before replacing it, and restarts it afterward.
 pub async fn update_command() -> Result<(), AppError> {
+    run_self_update("devm8", true).await
+}
+
+/// Update the `devm8-client` binary. No service to stop/restart — it's a
+/// plain interactive CLI, not a daemon.
+pub async fn client_update_command() -> Result<(), AppError> {
+    run_self_update("devm8-client", false).await
+}
+
+async fn run_self_update(bin_prefix: &str, manage_service: bool) -> Result<(), AppError> {
     // Dev builds skip update check.
     if CURRENT_VERSION == "0.0.0-dev" {
         println!("Skipping update check for dev build.");
         return Ok(());
     }
 
-    let bin_name = binary_name().ok_or_else(|| {
+    let bin_name = binary_name_for(bin_prefix).ok_or_else(|| {
         AppError::Friendly(FriendlyError::with_hint(
             "Unsupported platform".to_string(),
             "Pre-built binaries are available for macOS (arm64/x64) and Linux (x64).".to_string(),
         ))
     })?;
+    let bin_name = bin_name.as_str();
 
     // ------------------------------------------------------------------
     // Fetch the latest tag from GitHub.
@@ -182,13 +198,15 @@ pub async fn update_command() -> Result<(), AppError> {
     // Stop the service if it is running.
     // ------------------------------------------------------------------
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let was_running = {
+    let was_running = if manage_service {
         let s = agent_status().await;
         if s.running {
             println!("Stopping running daemon…");
             let _ = unload_agent().await;
         }
         s.running
+    } else {
+        false
     };
 
     // ------------------------------------------------------------------
