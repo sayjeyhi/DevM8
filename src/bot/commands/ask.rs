@@ -256,7 +256,7 @@ pub async fn ask_with_session(
     state: Arc<AppState>,
     question: String,
 ) -> Result<()> {
-    let (history, repo_path_opt, git_opt, context) = {
+    let (history, repo_path_opt, git_opt, context, project_key) = {
         let cs = state.chat_states.get(chat_id);
         if let Some(ref cs) = cs {
             let session = cs.ask_session.as_ref();
@@ -264,9 +264,10 @@ pub async fn ask_with_session(
             let repo = session.and_then(|s| s.repo_path.clone());
             let git = session.and_then(|s| s.git.clone());
             let ctx = session.and_then(|s| s.context.clone());
-            (history, repo, git, ctx)
+            let pkey = session.and_then(|s| s.project_key.clone());
+            (history, repo, git, ctx, pkey)
         } else {
-            (vec![], None, None, None)
+            (vec![], None, None, None, None)
         }
     };
 
@@ -362,7 +363,7 @@ pub async fn ask_with_session(
     );
 
     // Update session history
-    let pushed = {
+    let (pushed, session_user_id, turn_session_id, turn_project_key) = {
         let session_user_id = state
             .chat_states
             .get(chat_id)
@@ -376,6 +377,7 @@ pub async fn ask_with_session(
                 git_opt.clone(),
             );
             s.context = context.clone();
+            s.project_key = project_key.clone();
             s
         });
         session.history.push(HistoryEntry {
@@ -386,8 +388,56 @@ pub async fn ask_with_session(
             role: Role::Assistant,
             content: answer.clone(),
         });
-        session.pushed
+        (
+            session.pushed,
+            session_user_id,
+            session.session_id.clone(),
+            session.project_key.clone(),
+        )
     };
+
+    {
+        let state = Arc::clone(&state);
+        let channel = sender.channel_name();
+        let email = state
+            .email_for_channel_user(channel, &session_user_id)
+            .await;
+        let question = question.clone();
+        let answer = answer.clone();
+        if let Err(e) = state
+            .db
+            .record_chat_turn(
+                turn_project_key.clone(),
+                email.clone(),
+                channel.to_string(),
+                turn_session_id.clone(),
+                "user",
+                question,
+            )
+            .await
+        {
+            state
+                .logger
+                .warn(&format!("db: record_chat_turn (user) failed: {e}"), None);
+        }
+        if let Err(e) = state
+            .db
+            .record_chat_turn(
+                turn_project_key,
+                email,
+                channel.to_string(),
+                turn_session_id,
+                "assistant",
+                answer,
+            )
+            .await
+        {
+            state.logger.warn(
+                &format!("db: record_chat_turn (assistant) failed: {e}"),
+                None,
+            );
+        }
+    }
 
     // Edit the status message away (also removes the cancel button)
     sender
@@ -480,6 +530,7 @@ pub async fn prompt_worktree_branch_name(
     main_git: Arc<crate::git::GitClient>,
     suggested: String,
     context: Option<String>,
+    project_key: Option<String>,
     on_ready: WorktreeReadyAction,
 ) -> Result<()> {
     {
@@ -488,6 +539,7 @@ pub async fn prompt_worktree_branch_name(
             user_id: user_id.to_string(),
             main_git,
             context,
+            project_key,
             on_ready,
         });
     }
@@ -540,6 +592,9 @@ pub async fn handle_worktree_branch_name_input(
         .await;
     if let Some(ctx) = pending.context {
         session = session.with_context(ctx);
+    }
+    if let Some(pkey) = pending.project_key {
+        session = session.with_project_key(pkey);
     }
     let session_git = session.git.clone();
 
@@ -629,7 +684,10 @@ pub async fn handle_ask(
         let Some(mg) = main_git else {
             {
                 let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-                entry.ask_session = Some(AskSession::new(user_id, Some(repo_path.clone()), None));
+                entry.ask_session = Some(
+                    AskSession::new(user_id, Some(repo_path.clone()), None)
+                        .with_project_key(project_key.clone()),
+                );
             }
             if question.is_empty() {
                 sender
@@ -665,6 +723,7 @@ pub async fn handle_ask(
             mg,
             suggested,
             None,
+            Some(project_key.clone()),
             on_ready,
         )
         .await;
@@ -1002,6 +1061,7 @@ pub async fn handle_ask_session_callback(
             .and_then(|n| n.to_str())
             .unwrap_or("repo")
             .to_string();
+        let project_key_for_session = project_key.clone();
         let on_ready = match question.clone() {
             Some(q) => WorktreeReadyAction::AskQuestion(q),
             None => WorktreeReadyAction::RepoReady {
@@ -1019,6 +1079,7 @@ pub async fn handle_ask_session_callback(
             main_git,
             suggested,
             None,
+            Some(project_key_for_session),
             on_ready,
         )
         .await;

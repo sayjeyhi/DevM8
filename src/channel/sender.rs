@@ -60,6 +60,10 @@ pub trait ChannelSender: Send + Sync {
     /// A system context prefix injected at the start of Claude prompts.
     fn system_context_prefix(&self) -> &'static str;
 
+    /// Short channel identifier used for chat-history attribution
+    /// (e.g. "telegram", "slack", "teams", "cli").
+    fn channel_name(&self) -> &'static str;
+
     /// Send a long message split into chunks if needed.
     async fn send_in_chunks(&self, chat_id: &str, text: &str) -> Result<()>;
 }

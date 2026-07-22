@@ -13,12 +13,12 @@ use crate::logger::Logger;
 use super::commands::{
     ask_with_session, handle_admin, handle_admin_callback, handle_admin_input, handle_ask,
     handle_ask_session_callback, handle_ask_text_input, handle_grill_answer, handle_help,
-    handle_jira, handle_jira_action, handle_jira_input_with_text, handle_my_tickets_callback,
-    handle_pending_comment, handle_permissions_add, handle_permissions_back,
-    handle_permissions_done, handle_permissions_revoke, handle_permissions_toggle,
-    handle_permissions_user_input, handle_permissions_user_select, handle_post_analysis_implement,
-    handle_solve_action_callback, handle_solve_branch_name_input, handle_solve_repo_callback,
-    handle_worktree_branch_name_input,
+    handle_history, handle_history_callback, handle_jira, handle_jira_action,
+    handle_jira_input_with_text, handle_my_tickets_callback, handle_pending_comment,
+    handle_permissions_add, handle_permissions_back, handle_permissions_done,
+    handle_permissions_revoke, handle_permissions_toggle, handle_permissions_user_input,
+    handle_permissions_user_select, handle_post_analysis_implement, handle_solve_action_callback,
+    handle_solve_branch_name_input, handle_solve_repo_callback, handle_worktree_branch_name_input,
 };
 use super::handlers::{handle_pending_slack_reply, handle_slack_callback};
 use super::sender::TelegramSender;
@@ -37,6 +37,8 @@ pub enum BotCommand {
     Start(String),
     #[command(description = "Jira — manage tickets, create issues, and more")]
     Jira,
+    #[command(description = "Browse your past chat history by project")]
+    History,
     #[command(description = "Admin panel — permissions, projects, logs, and repos")]
     Admin,
 }
@@ -65,6 +67,10 @@ pub async fn start_polling(
         Arc::clone(logger),
         bot_username,
     )?);
+
+    if let Err(e) = crate::db::migrate::backfill_from_config(&state.db, &state.config).await {
+        logger.warn(&format!("db: user backfill migration failed: {e}"), None);
+    }
 
     logger.info(
         "telegram bot starting",
@@ -200,6 +206,20 @@ pub async fn start_polling(
         });
     }
 
+    // Start the devm8-client API server if configured.
+    if let Some(api_config) = config.api.clone() {
+        let ct_api = ct.clone();
+        let state_api = Arc::clone(&state);
+        let logger_api = Arc::clone(logger);
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::api::run_api_server(ct_api, state_api, &logger_api, &api_config).await
+            {
+                logger_api.error(&format!("api server error: {e}"), None);
+            }
+        });
+    }
+
     let handler = build_handler();
 
     let listener =
@@ -287,6 +307,7 @@ async fn dispatch_command(
         BotCommand::Help => ("help", String::new()),
         BotCommand::Start(a) => ("start", a.clone()),
         BotCommand::Jira => ("jira", String::new()),
+        BotCommand::History => ("history", String::new()),
         BotCommand::Admin => ("admin", String::new()),
     };
     state.logger.info(
@@ -358,6 +379,7 @@ async fn dispatch_command(
             }
         }
         BotCommand::Jira => handle_jira(Arc::clone(&sender), &chat_id, &user_id, state).await,
+        BotCommand::History => handle_history(Arc::clone(&sender), &chat_id, &user_id, state).await,
         BotCommand::Admin => {
             if !is_admin(user_id_i64, &state) {
                 sender
@@ -480,6 +502,11 @@ async fn dispatch_callback(
         }
 
         return handle_my_tickets_callback(Arc::clone(&sender), &chat_id, &user_id, &data, state)
+            .await;
+    }
+
+    if data.starts_with("history:") {
+        return handle_history_callback(Arc::clone(&sender), &chat_id, &user_id, &data, state)
             .await;
     }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub struct Paths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
+    pub db_file: PathBuf,
     pub restarts_file: PathBuf,
     pub slack_state_file: PathBuf,
     pub logs_dir: PathBuf,
@@ -43,6 +44,7 @@ impl Paths {
 
         Self {
             config_file: config_dir.join("config.toml"),
+            db_file: config_dir.join("devm8.db"),
             restarts_file: config_dir.join("restarts.json"),
             slack_state_file: config_dir.join("slack-state.json"),
             log_file: logs_dir.join("app.log"),

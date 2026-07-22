@@ -213,6 +213,29 @@ pub struct TeamsConfig {
     pub project_access: std::collections::HashMap<String, Vec<String>>,
 }
 
+fn default_api_port() -> u16 {
+    7887
+}
+
+/// Local API server for devm8-client. Disabled unless explicitly configured —
+/// mirrors the opt-in pattern of `SlackConfig`/`TeamsConfig`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiConfig {
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+    /// Interface to bind. Defaults to all interfaces — the real access boundary
+    /// is the bearer token, not the bind address (see devm8-client docs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_addr: Option<String>,
+    /// Optional TLS cert/key pair (e.g. from `tailscale cert`). When unset, the
+    /// server speaks plain HTTP — safe over a Tailscale tailnet, since transport
+    /// is already WireGuard-encrypted node-to-node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_cert_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_key_path: Option<String>,
+}
+
 impl SlackConfig {
     /// Returns true if the Slack bot (Socket Mode) is fully configured.
     pub fn bot_enabled(&self) -> bool {
@@ -252,6 +275,10 @@ pub struct AppConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teams: Option<TeamsConfig>,
+
+    /// Local API server for devm8-client. Unset = disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiConfig>,
 
     /// Per-user Jira credential overrides. Key is Telegram user_id as a string.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

@@ -174,6 +174,10 @@ reply. Never say it was \"shown\", \"displayed\", or \"listed above\".\
 \n\n---\n\n"
     }
 
+    fn channel_name(&self) -> &'static str {
+        "telegram"
+    }
+
     async fn send_in_chunks(&self, chat_id: &str, text: &str) -> Result<()> {
         let chunks = split_message(text, 4096);
         for chunk in &chunks {

@@ -5,7 +5,7 @@ use sysinfo::{Disks, System};
 
 use crate::bot::utils::escape_html;
 use crate::bot::AppState;
-use crate::channel::ChannelSender;
+use crate::channel::{Button, ChannelSender};
 use crate::daemon::agent_status;
 use crate::daemon::pid::{is_process_running, read_pid};
 use crate::shared::paths::PATHS;
@@ -122,6 +122,7 @@ pub async fn handle_status(
          Git projects:   <code>{git_projects}</code>"
     );
 
-    sender.send(chat_id, &text).await?;
+    let keyboard = vec![vec![Button::new("\u{1f4dc} History", "history:root")]];
+    sender.send_with_keyboard(chat_id, &text, keyboard).await?;
     Ok(())
 }

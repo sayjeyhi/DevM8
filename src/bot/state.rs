@@ -44,6 +44,11 @@ pub struct AskSession {
     pub pushed: bool,
     /// Optional system context prepended to every Claude prompt (e.g. ticket details)
     pub context: Option<String>,
+    /// Jira project key this session is scoped to, if known — used to attribute
+    /// persisted chat history to a project.
+    pub project_key: Option<String>,
+    /// Stable ID for this conversation, used to group its turns in `chat_history`.
+    pub session_id: String,
 }
 
 impl AskSession {
@@ -60,11 +65,18 @@ impl AskSession {
             history: Vec::new(),
             pushed: false,
             context: None,
+            project_key: None,
+            session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
     pub fn with_context(mut self, context: String) -> Self {
         self.context = Some(context);
+        self
+    }
+
+    pub fn with_project_key(mut self, project_key: impl Into<String>) -> Self {
+        self.project_key = Some(project_key.into());
         self
     }
 }
@@ -99,6 +111,9 @@ pub struct PendingWorktreeBranch {
     pub main_git: Arc<GitClient>,
     /// Optional system context to attach to the new AskSession (e.g. grill Q&A).
     pub context: Option<String>,
+    /// Jira project key this worktree belongs to, if known — carried onto the
+    /// resulting AskSession for chat-history attribution.
+    pub project_key: Option<String>,
     pub on_ready: WorktreeReadyAction,
 }
 

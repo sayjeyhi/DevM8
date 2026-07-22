@@ -15,13 +15,13 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            outfile: devm8-macos-arm64
+            arch_suffix: macos-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
-            outfile: devm8-macos-x64
+            arch_suffix: macos-x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            outfile: devm8-linux-x64
+            arch_suffix: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,11 +34,17 @@ jobs:
       - run: cargo build --release --target=${{ matrix.target }}
         env:
           DEVM8_VERSION: ${{ github.ref_name }}
-      - run: cp target/${{ matrix.target }}/release/devm8 ${{ matrix.outfile }}
+      - run: |
+          cp target/${{ matrix.target }}/release/devm8 devm8-${{ matrix.arch_suffix }}
+          cp target/${{ matrix.target }}/release/devm8-client devm8-client-${{ matrix.arch_suffix }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.outfile }}
-          path: ${{ matrix.outfile }}
+          name: devm8-${{ matrix.arch_suffix }}
+          path: devm8-${{ matrix.arch_suffix }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devm8-client-${{ matrix.arch_suffix }}
+          path: devm8-client-${{ matrix.arch_suffix }}
 
   release:
     needs: build

@@ -324,6 +324,10 @@ reply. Never say it was \"shown\", \"displayed\", or \"listed above\".\
 \n\n---\n\n"
     }
 
+    fn channel_name(&self) -> &'static str {
+        "teams"
+    }
+
     async fn send_in_chunks(&self, chat_id: &str, text: &str) -> Result<()> {
         let chars: Vec<char> = text.chars().collect();
         let mut start = 0;

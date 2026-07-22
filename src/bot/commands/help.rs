@@ -39,6 +39,9 @@ pub const HELP_TEXT: &str = "\
 /status
   Show daemon state, PID, Jira URL, and registered projects.
 
+/history
+  Browse your past chat history, grouped by project.
+
 /logs [n]
   Show last n daemon log lines (default 50, max 200).
 

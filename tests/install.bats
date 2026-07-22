@@ -193,10 +193,10 @@ _install_sh() { printf '%s' "${BATS_TEST_DIRNAME}/../install.sh"; }
     [[ "$output" == *"Unsupported OS"* ]]
 }
 
-@test "resolve_version: uses DEV_MATE_VERSION env var, no HTTP call" {
+@test "resolve_version: uses DEVM8_VERSION env var, no HTTP call" {
     printf '#!/bin/sh\necho "UNEXPECTED_CURL_CALL"; exit 1\n' > "$MOCK_BIN/curl"
     chmod +x "$MOCK_BIN/curl"
-    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; export DEV_MATE_VERSION=v1.0.0; source \"$(_install_sh)\"; resolve_version; printf '%s' \"\$VERSION\""
+    run bash -c "export PATH=\"$MOCK_BIN:\$PATH\"; export DEVM8_VERSION=v1.0.0; source \"$(_install_sh)\"; resolve_version; printf '%s' \"\$VERSION\""
     [ "$status" -eq 0 ]
     [[ "$output" == *"v1.0.0"* ]]
 }

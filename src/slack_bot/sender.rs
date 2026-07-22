@@ -244,6 +244,10 @@ reply.\
 \n\n---\n\n"
     }
 
+    fn channel_name(&self) -> &'static str {
+        "slack"
+    }
+
     async fn send_in_chunks(&self, chat_id: &str, text: &str) -> anyhow::Result<()> {
         let chars: Vec<char> = text.chars().collect();
         let mut start = 0;

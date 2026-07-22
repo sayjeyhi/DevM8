@@ -206,6 +206,46 @@ pub async fn solve_by_key(
 
     sender.send_in_chunks(chat_id, &analysis).await?;
 
+    {
+        let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
+        let channel = sender.channel_name();
+        let email = state.email_for_channel_user(channel, user_id).await;
+        let session_id = uuid::Uuid::new_v4().to_string();
+        if let Err(e) = state
+            .db
+            .record_chat_turn(
+                Some(project_key.clone()),
+                email.clone(),
+                channel.to_string(),
+                session_id.clone(),
+                "user",
+                format!("/solve {issue_key}"),
+            )
+            .await
+        {
+            state
+                .logger
+                .warn(&format!("db: record_chat_turn (user) failed: {e}"), None);
+        }
+        if let Err(e) = state
+            .db
+            .record_chat_turn(
+                Some(project_key),
+                email,
+                channel.to_string(),
+                session_id,
+                "assistant",
+                analysis.clone(),
+            )
+            .await
+        {
+            state.logger.warn(
+                &format!("db: record_chat_turn (assistant) failed: {e}"),
+                None,
+            );
+        }
+    }
+
     state.logger.info(
         "solve: posting analysis as Jira comment",
         Some(&json!({ "key": issue_key })),
@@ -589,8 +629,11 @@ pub async fn handle_solve_action_callback(
             };
             let context = format!("Analysis for {}:\n\n{}", issue_key, analysis);
             let question = AUTO_IMPLEMENT_QUESTION.to_string();
+            let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
             let Some(mg) = git else {
-                let session = AskSession::new(user_id, None, None).with_context(context);
+                let session = AskSession::new(user_id, None, None)
+                    .with_context(context)
+                    .with_project_key(project_key);
                 {
                     let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
                     entry.ask_session = Some(session);
@@ -606,6 +649,7 @@ pub async fn handle_solve_action_callback(
                 mg,
                 suggested,
                 Some(context),
+                Some(project_key),
                 WorktreeReadyAction::AskQuestion(question),
             )
             .await
@@ -1041,12 +1085,14 @@ pub async fn handle_post_analysis_implement(
     }
 
     let question = AUTO_IMPLEMENT_QUESTION.to_string();
+    let project_key = issue_key.split('-').next().unwrap_or("").to_uppercase();
 
     let Some(mg) = p.git else {
         let session = match p.context {
             Some(ctx) => AskSession::new(user_id, None, None).with_context(ctx),
             None => AskSession::new(user_id, None, None),
-        };
+        }
+        .with_project_key(project_key);
         {
             let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
             entry.ask_session = Some(session);
@@ -1063,6 +1109,7 @@ pub async fn handle_post_analysis_implement(
         mg,
         suggested,
         p.context,
+        Some(project_key),
         WorktreeReadyAction::AskQuestion(question),
     )
     .await

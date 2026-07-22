@@ -1,17 +1,4 @@
-mod bot;
-mod channel;
-mod claude;
-mod commands;
-mod config;
-mod daemon;
-mod git;
-mod jira;
-mod kiro;
-mod logger;
-mod shared;
-mod slack;
-mod slack_bot;
-mod teams_bot;
+use devm8::commands;
 
 use clap::{Parser, Subcommand};
 
@@ -61,6 +48,10 @@ enum Cmd {
     /// Configure Slack integration
     Slackmap,
 
+    /// Map channel identities (Telegram/Slack/Teams IDs) to emails, and
+    /// optionally issue a devm8-client pairing code
+    MigrateUsers,
+
     /// Clone a repository via SSH
     Clone {
         /// SSH repository URL (e.g. git@github.com:org/repo.git)
@@ -105,6 +96,7 @@ async fn main() {
             Cmd::Config => commands::config_command().await?,
             Cmd::Update => commands::update_command().await?,
             Cmd::Slackmap => commands::slackmap_command().await?,
+            Cmd::MigrateUsers => commands::migrate_users_command().await?,
             Cmd::Clone { url_pos, url, path } => {
                 commands::clone_command(url_pos.or(url), path).await?
             }

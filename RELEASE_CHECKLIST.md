@@ -16,4 +16,15 @@ Run these manually before publishing each release.
 - [ ] **Checksum mismatch** — corrupt a downloaded binary byte; "Checksum mismatch" message and exit 1
 - [ ] **Non-TTY stdin** — `curl ... | bash`; config wizard deferred; advisory message printed
 - [ ] **Linux ARM64 rejection** — on ARM64 Linux, explicit error message and exit 1
-- [ ] **Version pinning** — `DEV_MATE_VERSION=v1.0.0 bash install.sh`; exact version downloaded
+- [ ] **Version pinning** — `DEVM8_VERSION=v1.0.0 bash install.sh`; exact version downloaded
+
+## devm8-client
+
+- [ ] **`install.sh --client`** — installs `devm8-client` only, no launchd/systemd service registered
+- [ ] **`devm8-client login`** — pairs against a real devm8 server over a Tailscale tailnet using a code from `devm8 migrate-users`
+- [ ] **`devm8-client ask`** — single-shot and interactive REPL both stream and print responses correctly
+- [ ] **`devm8-client solve <key>`** — streams the analysis for a real Jira issue
+- [ ] **`devm8-client history` / `history show <id>`** — lists and displays a real session's transcript
+- [ ] **Telegram `/history`** — `/status` "History" button and `/history` command both paginate correctly
+- [ ] **`devm8 migrate-users`** — run against a config with existing `allowed_user_ids`; placeholder users get real emails attached
+- [ ] **`--client --uninstall`** — removes `devm8-client` only, leaves `~/.config/devm8-client/` in place

@@ -4,6 +4,8 @@ set -euo pipefail
 REPO="sayjeyhi/DevM8"
 CONFIG_FILE="${HOME}/.config/devm8/config.json"
 TMP_DIR=""
+CLIENT_MODE="${CLIENT_MODE:-false}"
+TARGET_NAME="${TARGET_NAME:-devm8}"
 
 detect_platform() {
   local os arch
@@ -39,12 +41,16 @@ detect_platform() {
 }
 
 build_binary_name() {
-  BINARY="devm8-${OS}-${ARCH}"
+  if [[ "$CLIENT_MODE" == "true" ]]; then
+    BINARY="devm8-client-${OS}-${ARCH}"
+  else
+    BINARY="devm8-${OS}-${ARCH}"
+  fi
 }
 
 resolve_version() {
-  if [[ -n "${DEV_MATE_VERSION:-}" ]]; then
-    VERSION="$DEV_MATE_VERSION"
+  if [[ -n "${DEVM8_VERSION:-}" ]]; then
+    VERSION="$DEVM8_VERSION"
   else
     local url
     url=$(curl -fsSL -o /dev/null -w "%{url_effective}" \
@@ -75,9 +81,9 @@ select_install_dir() {
     INSTALL_DIR="${HOME}/.local/bin"
     mkdir -p "$INSTALL_DIR"
   fi
-  if command -v devm8 &>/dev/null; then
+  if command -v "$TARGET_NAME" &>/dev/null; then
     local prev_dir
-    prev_dir=$(dirname "$(command -v devm8)")
+    prev_dir=$(dirname "$(command -v "$TARGET_NAME")")
     if [[ "$prev_dir" != "$INSTALL_DIR" ]]; then
       echo "Warning: previous install found at $prev_dir — there may be a stale binary." >&2
     fi
@@ -154,11 +160,16 @@ run_config_if_needed() {
 
 print_success() {
   echo ""
-  echo "devm8 ${VERSION} installed successfully!"
-  echo "  Binary:  $INSTALL_DIR/devm8"
-  echo "  Service: ${SERVICE_STATUS:-registered}"
+  echo "${TARGET_NAME} ${VERSION} installed successfully!"
+  echo "  Binary:  $INSTALL_DIR/${TARGET_NAME}"
+  if [[ "$CLIENT_MODE" != "true" ]]; then
+    echo "  Service: ${SERVICE_STATUS:-registered}"
+  fi
   if [[ "${PATH_MODIFIED:-false}" == "true" ]]; then
     echo "  PATH: $INSTALL_DIR added — restart your shell or run: source ~/.zshrc"
+  fi
+  if [[ "$CLIENT_MODE" == "true" ]]; then
+    echo "  Run: devm8-client login --server <your-server-url> --code <pairing-code>"
   fi
 }
 
@@ -314,6 +325,12 @@ start_service() {
 
 do_uninstall() {
   detect_platform
+  if [[ "$CLIENT_MODE" == "true" ]]; then
+    rm -f /usr/local/bin/devm8-client
+    rm -f "${HOME}/.local/bin/devm8-client"
+    echo "devm8-client removed. Credentials at ~/.config/devm8-client/ were left in place."
+    exit 0
+  fi
   stop_existing_service
   if [[ "$OS" == "macos" ]]; then
     rm -f "${HOME}/Library/LaunchAgents/com.devm8.plist"
@@ -333,17 +350,31 @@ do_uninstall() {
 
 main() {
   PATH_MODIFIED=false
+  CLIENT_MODE=false
+  DO_UNINSTALL=false
 
   for arg in "$@"; do
     case "$arg" in
-      --uninstall) do_uninstall; exit 0 ;;
+      --client) CLIENT_MODE=true ;;
+      --uninstall) DO_UNINSTALL=true ;;
       --help)
-        echo "Usage: install.sh [--uninstall] [--help]"
-        echo "  DEV_MATE_VERSION=vX.Y.Z  install specific version"
+        echo "Usage: install.sh [--client] [--uninstall] [--help]"
+        echo "  --client                 install the devm8-client terminal client instead of the devm8 server/daemon"
+        echo "  DEVM8_VERSION=vX.Y.Z     install a specific version"
         exit 0
         ;;
     esac
   done
+
+  TARGET_NAME="devm8"
+  if [[ "$CLIENT_MODE" == "true" ]]; then
+    TARGET_NAME="devm8-client"
+  fi
+
+  if [[ "$DO_UNINSTALL" == "true" ]]; then
+    do_uninstall
+    exit 0
+  fi
 
   TMP_DIR=$(mktemp -d)
   trap 'rm -rf "$TMP_DIR"' EXIT
@@ -360,11 +391,21 @@ main() {
     PATH_MODIFIED=true
   fi
 
-  stop_existing_service
+  if [[ "$CLIENT_MODE" != "true" ]]; then
+    stop_existing_service
+  fi
   download_with_retry "$RELEASE_URL/$BINARY" "$TMP_DIR/$BINARY"
   download_with_retry "$RELEASE_URL/checksums.txt" "$TMP_DIR/checksums.txt"
   verify_checksum "$TMP_DIR/$BINARY" "$TMP_DIR/checksums.txt"
-  install_binary "$TMP_DIR/$BINARY" "$INSTALL_DIR/devm8"
+  install_binary "$TMP_DIR/$BINARY" "$INSTALL_DIR/$TARGET_NAME"
+
+  if [[ "$CLIENT_MODE" == "true" ]]; then
+    if [[ "$OS" == "macos" ]]; then
+      strip_quarantine "$INSTALL_DIR/$TARGET_NAME"
+    fi
+    print_success
+    return 0
+  fi
 
   if [[ "$OS" == "macos" ]]; then
     strip_quarantine "$INSTALL_DIR/devm8"

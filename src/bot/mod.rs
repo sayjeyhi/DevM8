@@ -15,6 +15,7 @@ use dashmap::DashMap;
 use crate::claude::client::{AiClient, ClaudeClient};
 use crate::claude::types::ClaudeClientConfig;
 use crate::config::schema::{AiTool, AppConfig, UserJiraConfig};
+use crate::db::Db;
 use crate::git::GitClient;
 use crate::jira::client::JiraClient;
 use crate::jira::types::JiraClientConfig;
@@ -78,6 +79,9 @@ pub struct AppState {
 
     /// Cache of Teams user_id → display name.
     pub teams_user_names: DashMap<String, String>,
+
+    /// Email-identity + chat-history store (SQLite).
+    pub db: Arc<Db>,
 }
 
 impl AppState {
@@ -223,6 +227,41 @@ impl AppState {
         self.user_jira_clients.remove(user_id);
     }
 
+    /// Resolve `channel`/`external_id` (e.g. "telegram"/"123456") to the devm8 user's
+    /// email, auto-provisioning a placeholder user on first sight so chat history is
+    /// never dropped before an admin runs `devm8 migrate-users`.
+    pub async fn email_for_channel_user(&self, channel: &str, external_id: &str) -> String {
+        match self
+            .db
+            .get_or_create_user_for_channel(channel, external_id, None)
+            .await
+        {
+            Ok(email) => email,
+            Err(e) => {
+                self.logger.warn(
+                    &format!("db: get_or_create_user_for_channel failed: {e}"),
+                    None,
+                );
+                format!("{channel}-{external_id}@unmapped.devm8.local")
+            }
+        }
+    }
+
+    /// The Jira client for `email`, if any channel identity mapped to it has one configured.
+    /// Wired up by the API server (M2) for CLI-originated `/solve` requests.
+    #[allow(dead_code)]
+    pub async fn jira_for_email(&self, email: &str) -> Option<Arc<JiraClient>> {
+        let identities = self
+            .db
+            .list_channel_identities_for_email(email)
+            .await
+            .ok()?;
+        identities
+            .iter()
+            .find_map(|(_, external_id)| self.user_jira_clients.get(external_id))
+            .map(|c| Arc::clone(&*c))
+    }
+
     /// Build an `AskSession` backed by a per-user git worktree.
     /// Falls back to using the main repo path directly if worktree creation fails.
     pub async fn worktree_session(
@@ -361,6 +400,8 @@ impl AppState {
 
         let audit_logger = Arc::new(AuditLogger::new(&PATHS.audit_log_file));
 
+        let db = Arc::new(Db::open(&PATHS.db_file)?);
+
         Ok(Self {
             jira,
             user_jira_clients,
@@ -378,6 +419,7 @@ impl AppState {
             slack_user_names: DashMap::new(),
             teams_project_access,
             teams_user_names: DashMap::new(),
+            db,
         })
     }
 }
