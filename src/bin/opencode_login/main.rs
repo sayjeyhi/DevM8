@@ -10,8 +10,10 @@
 //!
 //! Flow: peer IP (from sshd's `SSH_CLIENT`/`SSH_CONNECTION`) -> `tailscale
 //! whois` -> devm8 email -> paired chat identities (`user_channel_identities`)
-//! -> most-recently-modified worktree across configured projects -> exec
-//! `opencode` inside the same bwrap sandbox `/ask`'s CLI button already uses.
+//! -> the project that email most recently selected in `/ask`
+//! (`user_active_project`, set the moment its worktree-backed session is
+//! created) -> that project's worktree -> exec `opencode` inside the same
+//! bwrap sandbox `/ask`'s CLI button already uses.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -60,12 +62,27 @@ async fn run() -> Result<()> {
     let config = load_config(None).context("failed to load devm8 config")?;
     let projects = config.projects.clone().unwrap_or_default();
 
-    let worktree = find_most_recent_worktree(&projects, &identities);
+    let active_project = match db.get_active_project(&email).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("opencode-login: warning: failed to look up active project: {e:#}");
+            None
+        }
+    };
+
+    let worktree = find_worktree(&projects, &identities, active_project.as_deref());
     let Some(worktree) = worktree else {
-        println!(
-            "No active /ask session found for {email} — start one in chat first\n\
-             (that's what creates the worktree opencode attaches to), then reconnect."
-        );
+        let msg = match active_project.as_deref() {
+            Some(pkey) => format!(
+                "No worktree found for project {pkey} (your most recently selected /ask \
+                 project) — re-run /ask, select it again, then reconnect."
+            ),
+            None => format!(
+                "No active /ask session found for {email} — start one in chat first\n\
+                 (that's what creates the worktree opencode attaches to), then reconnect."
+            ),
+        };
+        println!("{msg}");
         return Ok(());
     };
 
@@ -114,16 +131,31 @@ async fn run() -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// Across every configured project's repo paths, find the most recently
-/// modified worktree belonging to any of the caller's paired chat identities.
-/// v1 simplification: if someone has active sessions in more than one
-/// project, this picks the freshest rather than offering a picker.
-fn find_most_recent_worktree(
+/// Find the caller's worktree to attach `opencode` to.
+///
+/// When `active_project` is `Some`, only that project's repo paths are
+/// considered — this is what makes the OpenCode button target the specific
+/// project the user selected in `/ask`, rather than whichever project happens
+/// to have the most recently modified worktree on disk. `active_project` is
+/// `None` only for identities that predate the `user_active_project` table
+/// (or never recorded one), in which case we fall back to the old
+/// most-recently-modified-across-all-projects heuristic.
+fn find_worktree(
     projects: &std::collections::HashMap<String, Vec<String>>,
     identities: &[(String, String)],
+    active_project: Option<&str>,
 ) -> Option<PathBuf> {
+    let scoped: Vec<&Vec<String>> = match active_project {
+        Some(pkey) => projects
+            .iter()
+            .filter(|(key, _)| key.as_str() == pkey)
+            .map(|(_, paths)| paths)
+            .collect(),
+        None => projects.values().collect(),
+    };
+
     let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
-    for repo_paths in projects.values() {
+    for repo_paths in scoped {
         for repo_path in repo_paths {
             let git = GitClient::new(repo_path.clone());
             for (_, external_id) in identities {

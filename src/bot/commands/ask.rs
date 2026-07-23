@@ -180,6 +180,7 @@ async fn send_repo_ready_message(
         )]);
     }
     rows.push(vec![Button::new("\u{1f4bb} CLI", "ask:cli")]);
+    rows.push(vec![Button::new("\u{1f5a5} OpenCode", "ask:opencode")]);
 
     sender.send_with_keyboard(chat_id, &text, rows).await?;
 
@@ -598,10 +599,21 @@ pub async fn handle_worktree_branch_name_input(
         session = session.with_project_key(pkey);
     }
     let session_git = session.git.clone();
+    let active_project_key = session.project_key.clone();
 
     {
         let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
         entry.ask_session = Some(session);
+    }
+
+    if let Some(pkey) = active_project_key {
+        let channel = sender.channel_name();
+        let email = state.email_for_channel_user(channel, &pending.user_id).await;
+        if let Err(e) = state.db.set_active_project(&email, &pkey).await {
+            state
+                .logger
+                .warn(&format!("db: set_active_project failed: {e}"), None);
+        }
     }
 
     match pending.on_ready {

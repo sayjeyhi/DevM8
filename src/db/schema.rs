@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 /// Current schema version. Bump this and add a branch in `apply_migrations`
 /// whenever the schema changes.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Apply all pending schema migrations. Idempotent — safe to call on every startup.
 pub fn apply_migrations(conn: &Connection) -> rusqlite::Result<()> {
@@ -16,6 +16,10 @@ pub fn apply_migrations(conn: &Connection) -> rusqlite::Result<()> {
 
     if current < 1 {
         conn.execute_batch(V1_MIGRATION)?;
+    }
+
+    if current < 2 {
+        conn.execute_batch(V2_MIGRATION)?;
     }
 
     if current == 0 {
@@ -80,4 +84,12 @@ CREATE TABLE IF NOT EXISTS chat_history (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_history_email_project ON chat_history(email, project_key, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_history_session ON chat_history(session_id, created_at);
+"#;
+
+const V2_MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS user_active_project (
+  email         TEXT PRIMARY KEY REFERENCES users(email) ON UPDATE CASCADE ON DELETE CASCADE,
+  project_key   TEXT NOT NULL,
+  updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 "#;

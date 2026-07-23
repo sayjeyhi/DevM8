@@ -20,11 +20,20 @@ pub async fn create_slack_forward_handler(
     let channel_id = &message.channel.id;
     let ts = &message.message.ts;
 
-    let body = format!(
-        "\u{1f4e8} <b>Slack DM from @{}</b>\n{}",
-        sender.escape(snd),
-        sender.escape(text)
-    );
+    let label = if message.channel.is_im {
+        format!("Slack DM from @{}", sender.escape(snd))
+    } else if message.channel.is_mpim {
+        format!("Slack group DM from @{}", sender.escape(snd))
+    } else {
+        let chan_name = message.channel.name.as_deref().unwrap_or("channel");
+        format!(
+            "Slack message in #{} from @{}",
+            sender.escape(chan_name),
+            sender.escape(snd)
+        )
+    };
+
+    let body = format!("\u{1f4e8} <b>{}</b>\n{}", label, sender.escape(text));
 
     let mut keyboard = vec![vec![
         Button::new(

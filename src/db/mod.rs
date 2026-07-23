@@ -163,6 +163,41 @@ impl Db {
         .await
     }
 
+    /// Record which project `email` most recently selected in `/ask` — this is
+    /// the ground truth server-side integrations (e.g. opencode's Tailscale-SSH
+    /// login shell) use to target the correct worktree, since they only know the
+    /// caller's identity, not which chat button they clicked.
+    pub async fn set_active_project(&self, email: &str, project_key: &str) -> Result<()> {
+        let email = email.to_string();
+        let project_key = project_key.to_string();
+        self.blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO user_active_project (email, project_key, updated_at) \
+                 VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now')) \
+                 ON CONFLICT(email) DO UPDATE SET \
+                 project_key = excluded.project_key, updated_at = excluded.updated_at",
+                params![email, project_key],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// The project `email` most recently selected in `/ask`, if any.
+    pub async fn get_active_project(&self, email: &str) -> Result<Option<String>> {
+        let email = email.to_string();
+        self.blocking(move |conn| {
+            conn.query_row(
+                "SELECT project_key FROM user_active_project WHERE email = ?1",
+                params![email],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .await
+    }
+
     /// Append one chat turn (user question or assistant answer) to history.
     pub async fn record_chat_turn(
         &self,

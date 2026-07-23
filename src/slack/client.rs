@@ -21,6 +21,7 @@ pub struct SlackRateLimitError {
 pub struct SlackClient {
     token: String,
     http: Client,
+    own_user_id: tokio::sync::OnceCell<String>,
 }
 
 impl SlackClient {
@@ -28,6 +29,7 @@ impl SlackClient {
         Self {
             token: token.into(),
             http: Client::new(),
+            own_user_id: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -178,24 +180,32 @@ impl SlackClient {
         Ok(result)
     }
 
-    /// Return all IM (1:1 DM) and MPIM channels, paginated.
-    pub async fn list_im_channels(&self) -> Result<Vec<SlackChannel>> {
+    /// Return (and cache) the authenticated user's own Slack user ID, used to
+    /// exclude the user's own messages from being forwarded.
+    pub async fn get_own_user_id(&self) -> Result<String> {
+        self.own_user_id
+            .get_or_try_init(|| async { Ok::<_, anyhow::Error>(self.auth_test().await?.user_id) })
+            .await
+            .cloned()
+    }
+
+    /// Return all conversations the user can see: IMs, MPIMs, and public/private
+    /// channels, paginated.
+    pub async fn list_conversations(&self) -> Result<Vec<SlackChannel>> {
         let mut channels: Vec<SlackChannel> = Vec::new();
         let mut cursor = String::new();
 
         loop {
-            let mut params: Vec<(&str, &str)> = vec![("types", "im,mpim"), ("limit", "200")];
-            if !cursor.is_empty() {
-                params.push(("cursor", &cursor));
-            }
-            // borrow issue: keep cursor as owned
             let cursor_owned = cursor.clone();
-            let mut params2: Vec<(&str, &str)> = vec![("types", "im,mpim"), ("limit", "200")];
+            let mut params: Vec<(&str, &str)> = vec![
+                ("types", "im,mpim,public_channel,private_channel"),
+                ("limit", "200"),
+            ];
             if !cursor_owned.is_empty() {
-                params2.push(("cursor", &cursor_owned));
+                params.push(("cursor", &cursor_owned));
             }
 
-            let val = self.get("conversations.list", &params2).await?;
+            let val = self.get("conversations.list", &params).await?;
 
             let batch: Vec<SlackChannel> = val
                 .get("channels")
@@ -265,6 +275,18 @@ impl SlackClient {
         let val = self.get("conversations.history", &params).await?;
         let messages = Self::parse_messages(&val);
         Ok(messages.into_iter().next())
+    }
+
+    /// Return the calling user's last-read timestamp for a conversation, if
+    /// Slack reports one (used to skip messages already read directly in Slack).
+    pub async fn get_last_read(&self, channel_id: &str) -> Result<Option<String>> {
+        let val = self
+            .get("conversations.info", &[("channel", channel_id)])
+            .await?;
+        Ok(val
+            .pointer("/channel/last_read")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string()))
     }
 
     /// Fetch user information.
