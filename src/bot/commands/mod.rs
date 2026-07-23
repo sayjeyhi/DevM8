@@ -20,7 +20,7 @@ pub use add_project::handle_add_project;
 pub use admin::{handle_admin, handle_admin_callback, handle_admin_input};
 pub use ask::{
     ask_with_session, handle_ask, handle_ask_session_callback, handle_ask_text_input,
-    handle_worktree_branch_name_input,
+    handle_worktree_branch_name_input, start_ask_for_project,
 };
 pub use clone::handle_clone;
 pub use comment::{handle_comment, handle_pending_comment};

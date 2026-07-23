@@ -627,6 +627,107 @@ pub async fn handle_worktree_branch_name_input(
     Ok(())
 }
 
+/// Begin an ask session scoped to a single, already-known project: for a
+/// git-backed repo this prompts for a worktree branch name (mirroring
+/// `/solve`'s implement step), then — once the branch reply lands via
+/// `handle_worktree_branch_name_input` — sends the repo-ready status message
+/// or, if `question` was already supplied, runs it immediately. Shared by
+/// `handle_ask`'s single-repo branch (Telegram/Slack/Teams) and
+/// `start_ask_for_project` (devm8-client's explicit session start).
+#[allow(clippy::too_many_arguments)]
+pub async fn start_ask_session(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+    user_id: &str,
+    project_key: String,
+    repo_path: std::path::PathBuf,
+    main_git: Option<Arc<crate::git::GitClient>>,
+    question: String,
+) -> Result<()> {
+    let Some(mg) = main_git else {
+        {
+            let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
+            entry.ask_session =
+                Some(AskSession::new(user_id, Some(repo_path), None).with_project_key(project_key));
+        }
+        if question.is_empty() {
+            sender
+                .send(
+                    chat_id,
+                    "What would you like to ask Claude about this repository?",
+                )
+                .await?;
+            return Ok(());
+        }
+        return ask_with_session(sender, chat_id, state, question).await;
+    };
+
+    let repo_name = repo_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("repo")
+        .to_string();
+    let on_ready = if question.is_empty() {
+        WorktreeReadyAction::RepoReady {
+            project_key: project_key.clone(),
+            repo_name,
+        }
+    } else {
+        WorktreeReadyAction::AskQuestion(question.clone())
+    };
+    let suggested = suggest_ask_branch_name(&question, user_id);
+    prompt_worktree_branch_name(
+        sender,
+        chat_id,
+        state,
+        user_id,
+        mg,
+        suggested,
+        None,
+        Some(project_key),
+        on_ready,
+    )
+    .await
+}
+
+/// devm8-client's explicit session start: the CLI already knows which project
+/// was picked (via its own numbered menu — the same accessible-project list
+/// Telegram's picker buttons come from), so this skips straight to the
+/// single-project branch of `handle_ask` instead of re-deriving it from
+/// `accessible_repos`.
+pub async fn start_ask_for_project(
+    sender: Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: Arc<AppState>,
+    user_id: &str,
+    project_key: String,
+) -> Result<()> {
+    let Some(mg) = state
+        .git_map
+        .get(&project_key)
+        .and_then(|v| v.first())
+        .cloned()
+    else {
+        sender
+            .send(chat_id, &format!("Unknown project: {project_key}"))
+            .await?;
+        return Ok(());
+    };
+    let repo_path = mg.repo_path.clone();
+    start_ask_session(
+        sender,
+        chat_id,
+        state,
+        user_id,
+        project_key,
+        repo_path,
+        Some(mg),
+        String::new(),
+    )
+    .await
+}
+
 pub async fn handle_ask(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
@@ -681,50 +782,15 @@ pub async fn handle_ask(
             .find(|g| g.repo_path == *repo_path)
             .cloned();
 
-        let Some(mg) = main_git else {
-            {
-                let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-                entry.ask_session = Some(
-                    AskSession::new(user_id, Some(repo_path.clone()), None)
-                        .with_project_key(project_key.clone()),
-                );
-            }
-            if question.is_empty() {
-                sender
-                    .send(
-                        chat_id,
-                        "What would you like to ask Claude about this repository?",
-                    )
-                    .await?;
-                return Ok(());
-            }
-            return ask_with_session(Arc::clone(&sender), chat_id, state, question).await;
-        };
-
-        let repo_name = repo_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("repo")
-            .to_string();
-        let on_ready = if question.is_empty() {
-            WorktreeReadyAction::RepoReady {
-                project_key: project_key.clone(),
-                repo_name,
-            }
-        } else {
-            WorktreeReadyAction::AskQuestion(question.clone())
-        };
-        let suggested = suggest_ask_branch_name(&question, user_id);
-        return prompt_worktree_branch_name(
-            Arc::clone(&sender),
+        return start_ask_session(
+            sender,
             chat_id,
             state,
             user_id,
-            mg,
-            suggested,
-            None,
-            Some(project_key.clone()),
-            on_ready,
+            project_key.clone(),
+            repo_path.clone(),
+            main_git,
+            question,
         )
         .await;
     }

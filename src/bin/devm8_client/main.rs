@@ -6,8 +6,8 @@ use std::io::Write;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use devm8::api::protocol::{
-    AskEvent, AskRequest, MeResponse, PairRequest, PairResponse, PrReviewRequest, ProjectDto,
-    SolveRequest,
+    AskEvent, AskRequest, AskStartRequest, MeResponse, PairRequest, PairResponse, PrReviewRequest,
+    ProjectDto, SolveRequest,
 };
 use url::Url;
 
@@ -408,7 +408,15 @@ async fn ask(question: Vec<String>) -> Result<()> {
     }
 
     println!("Interactive session — Ctrl-D to exit.");
-    interactive_loop(&client, &creds, Some(project), None).await
+    let pending = stream_and_render(
+        &client,
+        format!("{}/v1/ask/start", creds.server),
+        AskStartRequest {
+            project: project.clone(),
+        },
+    )
+    .await?;
+    interactive_loop(&client, &creds, Some(project), pending).await
 }
 
 /// Reads lines from stdin until EOF, dispatching each one either as a numeric

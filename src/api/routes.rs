@@ -19,7 +19,8 @@ use crate::bot::commands::solve::{
 use crate::bot::commands::{
     ask_with_session, handle_ask_session_callback, handle_jira, handle_jira_action,
     handle_jira_input_with_text, handle_my_tickets_callback, handle_pending_comment,
-    handle_pr_review_action, start_pr_review,
+    handle_pr_review_action, handle_worktree_branch_name_input, start_ask_for_project,
+    start_pr_review,
 };
 use crate::bot::state::AskSession;
 use crate::bot::AppState;
@@ -36,6 +37,7 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/me", get(me))
         .route("/v1/projects", get(projects))
         .route("/v1/ask", post(ask))
+        .route("/v1/ask/start", post(ask_start))
         .route("/v1/solve", post(solve))
         .route("/v1/pr-review", post(pr_review))
         .route("/v1/jira/start", post(jira_start))
@@ -174,6 +176,39 @@ async fn ask(
         None
     };
 
+    // A worktree branch-name prompt (from `start_ask_for_project` or the
+    // solve "implement" step) is waiting for free text — route the reply to
+    // `handle_worktree_branch_name_input`, mirroring polling.rs's
+    // `pending_worktree_branch` check ahead of the plain ask session.
+    let pending_worktree_branch = if pending_jira.is_none() && pending_comment.is_none() {
+        app_state
+            .chat_states
+            .get(&chat_id)
+            .map(|s| s.pending_worktree_branch.is_some())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    if pending_worktree_branch {
+        let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
+        let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
+        let branch_name = req.question.clone();
+
+        tokio::spawn(async move {
+            let result =
+                handle_worktree_branch_name_input(sender, &chat_id, app_state, branch_name).await;
+            let _ = match result {
+                Ok(()) => tx.send(AskEvent::Done),
+                Err(e) => tx.send(AskEvent::Error {
+                    message: e.to_string(),
+                }),
+            };
+        });
+
+        return Sse::new(to_sse_stream(rx)).keep_alive(KeepAlive::default());
+    }
+
     if pending_jira.is_some() || pending_comment.is_some() {
         let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
         let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
@@ -240,6 +275,36 @@ async fn ask(
 
     tokio::spawn(async move {
         let result = ask_with_session(sender, &chat_id, app_state, question).await;
+        let _ = match result {
+            Ok(()) => tx.send(AskEvent::Done),
+            Err(e) => tx.send(AskEvent::Error {
+                message: e.to_string(),
+            }),
+        };
+    });
+
+    Sse::new(to_sse_stream(rx)).keep_alive(KeepAlive::default())
+}
+
+/// Explicit session start, mirroring Telegram's `/start`: for a git-backed
+/// project this always prompts for a worktree branch name and, once
+/// answered, shows the repo-ready status message — before any question is
+/// asked. The CLI calls this once, up front, then falls through to the same
+/// `/v1/ask` + `/v1/action` loop `ask()` above already drives.
+async fn ask_start(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthedUser>,
+    Json(req): Json<AskStartRequest>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let chat_id = format!("cli:{}", user.email);
+    let app_state = Arc::clone(&state.app_state);
+
+    let (tx, rx) = mpsc::unbounded_channel::<AskEvent>();
+    let sender: Arc<dyn ChannelSender> = Arc::new(CliSender::new(tx.clone()));
+    let email = user.email.clone();
+
+    tokio::spawn(async move {
+        let result = start_ask_for_project(sender, &chat_id, app_state, &email, req.project).await;
         let _ = match result {
             Ok(()) => tx.send(AskEvent::Done),
             Err(e) => tx.send(AskEvent::Error {

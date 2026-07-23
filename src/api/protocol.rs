@@ -83,6 +83,14 @@ pub struct AskRequest {
     pub project: Option<String>,
 }
 
+/// Explicitly begins an ask session for a project, mirroring Telegram's
+/// `/start` — for a git-backed project this triggers the same worktree
+/// branch-name prompt / repo-ready message before any question can be asked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskStartRequest {
+    pub project: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolveRequest {
     pub issue_key: String,
