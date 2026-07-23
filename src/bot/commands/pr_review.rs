@@ -1,6 +1,9 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
+use chrono::Local;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -8,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::bot::state::PrReviewComment;
 use crate::bot::AppState;
 use crate::channel::{Button, ChannelSender};
-use crate::claude::types::AskOptions;
+use crate::claude::types::{AskOptions, ProgressCallback};
 use crate::shared::errors::{AppError, ClaudeError};
 
 const PR_REVIEW_PROMPT_TEMPLATE: &str = "\
@@ -44,8 +47,9 @@ struct PrReviewOutput {
     comments: Vec<PrReviewComment>,
 }
 
-/// Runs Claude's review of `url` and, on success, stores the resulting comments on
-/// `chat_state.pending_pr_review` and shows a picker to view each one's detail.
+/// Runs Claude's review of `url`, showing live progress as it works, then
+/// prints every comment's full detail inline and saves the whole report to
+/// `~/.devm8/pr-reviews/`.
 pub async fn start_pr_review(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
@@ -65,7 +69,34 @@ pub async fn start_pr_review(
     }
 
     let prompt = PR_REVIEW_PROMPT_TEMPLATE.replace("{url}", url);
+
+    let started = Instant::now();
+    let sender_cb = Arc::clone(&sender);
+    let status_ref_cb = status_ref.clone();
+    let on_progress: ProgressCallback = Box::new(move |lines: Vec<String>| {
+        let sender = Arc::clone(&sender_cb);
+        let sref = status_ref_cb.clone();
+        let kb = vec![vec![Button::new("Cancel", "prreview:cancel")]];
+        let elapsed = started.elapsed().as_secs();
+        let generated: usize = lines.iter().map(|l| l.len()).sum();
+        Box::pin(async move {
+            let text = if generated == 0 {
+                format!(
+                    "Reviewing pull request with Claude... ({elapsed}s elapsed — fetching PR \
+                     details and diff via gh CLI)"
+                )
+            } else {
+                format!(
+                    "Reviewing pull request with Claude... ({elapsed}s elapsed, {generated} \
+                     chars of findings generated so far)"
+                )
+            };
+            let _ = sender.edit_with_keyboard(&sref, &text, kb).await;
+        })
+    });
+
     let opts = AskOptions {
+        on_progress: Some(on_progress),
         cancel_token: Some(ct),
         ..AskOptions::default()
     };
@@ -114,6 +145,7 @@ pub async fn start_pr_review(
                 )
                 .await?;
             sender.send_in_chunks(chat_id, &text).await?;
+            notify_saved_report(&sender, chat_id, &state, url, &text).await;
             return Ok(());
         }
     };
@@ -133,45 +165,130 @@ pub async fn start_pr_review(
     };
     sender.edit_with_keyboard(&status_ref, &header, vec![]).await?;
 
-    if parsed.comments.is_empty() {
-        return Ok(());
+    if !parsed.comments.is_empty() {
+        let detail = render_comments_detail(&sender, &parsed.comments);
+        sender.send_in_chunks(chat_id, &detail).await?;
     }
 
-    {
-        let mut entry = state.chat_states.entry(chat_id.to_string()).or_default();
-        entry.pending_pr_review = Some(parsed.comments.clone());
-    }
+    let report = render_report_markdown(url, &parsed);
+    notify_saved_report(&sender, chat_id, &state, url, &report).await;
 
-    send_comment_picker(&sender, chat_id, &parsed.comments).await
+    Ok(())
 }
 
-async fn send_comment_picker(
-    sender: &Arc<dyn ChannelSender>,
-    chat_id: &str,
-    comments: &[PrReviewComment],
-) -> Result<()> {
-    let keyboard: Vec<Vec<Button>> = comments
+/// Formats every comment's full detail (location, severity, title, body) as
+/// one message, replacing the old "pick a comment to view" flow.
+fn render_comments_detail(sender: &Arc<dyn ChannelSender>, comments: &[PrReviewComment]) -> String {
+    comments
         .iter()
-        .enumerate()
-        .map(|(i, c)| {
+        .map(|c| {
             let loc = match c.line {
                 Some(l) => format!("{}:{}", c.file, l),
                 None => c.file.clone(),
             };
-            vec![Button::new(
-                format!("[{}] {} — {}", c.severity, loc, c.title),
-                format!("prreview:show:{i}"),
-            )]
+            format!(
+                "{}\n{}\n\n{}",
+                sender.bold(&sender.escape(&format!("[{}] {}", c.severity, loc))),
+                sender.escape(&c.title),
+                sender.escape(&c.body)
+            )
         })
-        .collect();
-    sender
-        .send_with_keyboard(chat_id, "Select a comment to view details:", keyboard)
-        .await?;
-    Ok(())
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n")
 }
 
-/// Routes a "prreview:*" action button — "cancel" aborts an in-flight review,
-/// "show:<idx>" prints one comment's full detail and re-shows the picker.
+/// Plain-text (unescaped) version of the report, suitable for writing to disk.
+fn render_report_markdown(url: &str, parsed: &PrReviewOutput) -> String {
+    let mut out = format!(
+        "# PR Review: {}\n\nURL: {}\nReviewed: {}\n\n## Summary\n{}\n\n",
+        parsed.pr_title,
+        url,
+        Local::now().format("%Y-%m-%d %H:%M:%S"),
+        parsed.summary,
+    );
+
+    if parsed.comments.is_empty() {
+        out.push_str("No issues found.\n");
+        return out;
+    }
+
+    out.push_str(&format!("## Comments ({})\n\n", parsed.comments.len()));
+    for c in &parsed.comments {
+        let loc = match c.line {
+            Some(l) => format!("{}:{}", c.file, l),
+            None => c.file.clone(),
+        };
+        out.push_str(&format!(
+            "### [{}] {} — {}\n{}\n\n",
+            c.severity, loc, c.title, c.body
+        ));
+    }
+    out
+}
+
+/// Saves `contents` under `~/.devm8/pr-reviews/` and tells the user where it
+/// landed, or logs and reports the error if saving failed.
+async fn notify_saved_report(
+    sender: &Arc<dyn ChannelSender>,
+    chat_id: &str,
+    state: &Arc<AppState>,
+    url: &str,
+    contents: &str,
+) {
+    match save_report(url, contents) {
+        Ok(path) => {
+            let _ = sender
+                .send(chat_id, &format!("Saved full review to {}", path.display()))
+                .await;
+        }
+        Err(e) => {
+            state.logger.error(
+                &format!("pr-review: failed to save report: {e}"),
+                Some(&json!({ "url": url })),
+            );
+            let _ = sender
+                .send(chat_id, &format!("Couldn't save the review to disk: {e}"))
+                .await;
+        }
+    }
+}
+
+fn reviews_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("could not determine home directory")?;
+    let dir = home.join(".devm8").join("pr-reviews");
+    std::fs::create_dir_all(&dir).context("creating ~/.devm8/pr-reviews")?;
+    Ok(dir)
+}
+
+fn save_report(url: &str, contents: &str) -> Result<PathBuf> {
+    let dir = reviews_dir()?;
+    let filename = format!(
+        "{}_{}.md",
+        pr_slug(url),
+        Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let path = dir.join(filename);
+    std::fs::write(&path, contents).context("writing pr review file")?;
+    Ok(path)
+}
+
+/// Turns `https://github.com/owner/repo/pull/123` into `owner-repo-123`,
+/// falling back to a sanitized version of the whole URL for anything else.
+fn pr_slug(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    let parts: Vec<&str> = trimmed.rsplitn(4, '/').collect();
+    if parts.len() == 4 && parts[1] == "pull" {
+        format!("{}-{}-{}", parts[3], parts[2], parts[0])
+    } else {
+        trimmed
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect()
+    }
+}
+
+/// Routes a "prreview:*" action button — currently only "cancel", which
+/// aborts an in-flight review.
 pub async fn handle_pr_review_action(
     sender: Arc<dyn ChannelSender>,
     chat_id: &str,
@@ -192,43 +309,8 @@ pub async fn handle_pr_review_action(
         if !cancelled {
             sender.send(chat_id, "No active request to cancel.").await?;
         }
-        return Ok(());
     }
-
-    let Some(idx_str) = action.strip_prefix("prreview:show:") else {
-        return Ok(());
-    };
-    let Ok(idx) = idx_str.parse::<usize>() else {
-        return Ok(());
-    };
-
-    let comments = state
-        .chat_states
-        .get(chat_id)
-        .and_then(|s| s.pending_pr_review.clone());
-    let Some(comments) = comments else {
-        sender
-            .send(chat_id, "This review session has expired — run pr-review again.")
-            .await?;
-        return Ok(());
-    };
-    let Some(c) = comments.get(idx) else {
-        return Ok(());
-    };
-
-    let loc = match c.line {
-        Some(l) => format!("{}:{}", c.file, l),
-        None => c.file.clone(),
-    };
-    let detail = format!(
-        "{}\n{}\n\n{}",
-        sender.bold(&sender.escape(&format!("[{}] {}", c.severity, loc))),
-        sender.escape(&c.title),
-        sender.escape(&c.body)
-    );
-    sender.send(chat_id, &detail).await?;
-
-    send_comment_picker(&sender, chat_id, &comments).await
+    Ok(())
 }
 
 /// Pulls the first top-level `{ ... }` JSON object out of `text`, tolerating an

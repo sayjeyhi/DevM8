@@ -312,9 +312,6 @@ pub struct ChatState {
     /// Waiting for user to type input for a Jira panel action
     pub pending_jira_action: Option<JiraPendingAction>,
 
-    /// Comments from the last `pr-review` run, selectable for detail view
-    pub pending_pr_review: Option<Vec<PrReviewComment>>,
-
     /// Active cancellation token for an in-flight AI request; cancel() aborts it.
     pub cancel_token: Option<CancellationToken>,
 }

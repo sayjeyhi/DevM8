@@ -219,6 +219,7 @@ async fn session_keyboard(
             Button::new("\u{1f4ac} Follow up", "ask:followup"),
             Button::new("\u{1f4bb} CLI", "ask:cli"),
         ],
+        vec![Button::new("\u{1f5a5} OpenCode", "ask:opencode")],
         vec![
             Button::new("\u{1f33f} Branch", "ask:branch"),
             Button::new(commit_label, "ask:commit"),
@@ -1641,6 +1642,16 @@ pub async fn handle_ask_session_callback(
                 .unwrap_or_default();
             sender
                 .send(chat_id, &format!("Enter the command to run{}:", cwd_hint))
+                .await?;
+        }
+
+        "opencode" => {
+            sender
+                .send(
+                    chat_id,
+                    "Run <code>devm8-client opencode</code> on your machine to attach an \
+                     interactive opencode session to this worktree over Tailscale SSH.",
+                )
                 .await?;
         }
 

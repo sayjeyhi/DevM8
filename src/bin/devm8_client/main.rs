@@ -76,6 +76,15 @@ enum Cmd {
 
     /// Check for and apply devm8-client binary updates
     Update,
+
+    /// Attach an interactive `opencode` session to your active /ask worktree
+    /// on the server, over Tailscale SSH.
+    OpenCode {
+        /// OS account name the server's opencode-login binary is installed as,
+        /// as set up by an admin (see the devm8 README's opencode-over-SSH section).
+        #[arg(long, default_value = "devm8-opencode")]
+        account: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -112,12 +121,35 @@ async fn run() -> Result<()> {
         Cmd::Jira => jira().await,
         Cmd::History { action, limit } => history(action, limit).await,
         Cmd::Update => update().await,
+        Cmd::OpenCode { account } => opencode(account).await,
     }
 }
 
 async fn update() -> Result<()> {
     devm8::commands::client_update_command().await?;
     Ok(())
+}
+
+/// Shells out to the local `ssh` binary against the shared opencode account —
+/// no local opencode install needed, since the whole session runs server-side
+/// (see `opencode-login`, the account's login shell).
+async fn opencode(account: String) -> Result<()> {
+    let creds = config::load()?;
+    let host = Url::parse(&creds.server)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .context("could not determine a host from the stored --server URL")?;
+
+    let target = format!("{account}@{host}");
+    println!("Connecting to {target} (Tailscale SSH)...");
+
+    let status = std::process::Command::new("ssh")
+        .arg("-t")
+        .arg(&target)
+        .status()
+        .context("failed to launch local `ssh` — is it installed and on PATH?")?;
+
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -483,56 +515,20 @@ async fn solve(issue_key: String) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// PR review — streams Claude's review of a GitHub PR, then lets the user pick
-// numbered comments to view in full. Selection only ever prints locally;
-// nothing is posted back to GitHub.
+// PR review — streams Claude's review of a GitHub PR with live progress,
+// prints every comment's full detail, and saves the report server-side under
+// ~/.devm8/pr-reviews/. Nothing is posted back to GitHub.
 // ---------------------------------------------------------------------------
 
 async fn pr_review(url: String) -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
-    let mut pending = stream_and_render(
+    stream_and_render(
         &client,
         format!("{}/v1/pr-review", creds.server),
         PrReviewRequest { url },
     )
     .await?;
-
-    while let Some(PendingChoices(ref data)) = pending {
-        if data.is_empty() {
-            break;
-        }
-
-        print!("> ");
-        std::io::stdout().flush().ok();
-        let mut line = String::new();
-        if std::io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(idx) = line.parse::<usize>() else {
-            println!("Enter a number to view a comment, or Ctrl-D to exit.");
-            continue;
-        };
-        if idx < 1 || idx > data.len() {
-            println!(
-                "Invalid selection — enter a number between 1 and {}.",
-                data.len()
-            );
-            continue;
-        }
-
-        let action = data[idx - 1].clone();
-        pending = stream_and_render(
-            &client,
-            format!("{}/v1/action", creds.server),
-            devm8::api::protocol::ActionRequest { action },
-        )
-        .await?;
-    }
     Ok(())
 }
 

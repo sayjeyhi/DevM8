@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "devm8-client"
 path = "src/bin/devm8_client/main.rs"
 
+[[bin]]
+name = "opencode-login"
+path = "src/bin/opencode_login/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 teloxide = { version = "0.13", features = ["macros", "throttle"] }

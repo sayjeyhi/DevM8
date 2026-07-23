@@ -40,25 +40,35 @@ fn format_tickets_page(
     issues
         .iter()
         .map(|i| {
+            // The [details] deep link only makes sense on Telegram — it opens
+            // the bot chat via a t.me link, which has no equivalent on other
+            // channels (Slack, Teams, CLI).
             let details_link = match bot_username {
-                Some(uname) if !uname.is_empty() => format!(
-                    "  <a href=\"https://t.me/{}?start={}\">[details]</a>",
-                    uname, i.key,
-                ),
+                Some(uname) if !uname.is_empty() && sender.channel_name() == "telegram" => {
+                    format!(
+                        "  {}",
+                        sender.link(&format!("https://t.me/{}?start={}", uname, i.key), "[details]")
+                    )
+                }
                 _ => String::new(),
             };
             format!(
-                "{} <a href=\"{}\">{}</a> \u{2014} {}{}\n  <i>{}</i>",
+                "{} {} \u{2014} {}{}\n  {}",
                 status_emoji(&i.status),
-                i.url,
-                sender.escape(&i.key),
+                sender.link(&i.url, &sender.escape(&i.key)),
                 sender.escape(&i.summary),
                 details_link,
-                sender.escape(&i.status),
+                sender.italic(&sender.escape(&i.status)),
             )
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// A ticket's key rendered as a bold hyperlink — the common header fragment
+/// repeated across the detail, ask-context, and repo-picker messages below.
+fn bold_issue_link(sender: &Arc<dyn ChannelSender>, url: &str, key: &str) -> String {
+    sender.bold(&sender.link(url, &sender.escape(key)))
 }
 
 fn build_list_keyboard(page: usize, has_next: bool) -> Vec<Vec<Button>> {
@@ -452,9 +462,8 @@ pub async fn handle_ticket_details(
     let desc_preview: String = issue.description.chars().take(400).collect();
 
     let text = format!(
-        "<b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\n{}{}",
-        issue.url,
-        sender.escape(&issue.key),
+        "{} \u{2014} {}\nStatus: {}\n\n{}{}",
+        bold_issue_link(&sender, &issue.url, &issue.key),
         sender.escape(&issue.summary),
         sender.escape(&issue.status),
         sender.escape(&desc_preview),
@@ -520,7 +529,10 @@ pub async fn handle_move_start(
     sender
         .send_with_keyboard(
             chat_id,
-            &format!("Select new status for <b>{}</b>:", sender.escape(issue_key)),
+            &format!(
+                "Select new status for {}:",
+                sender.bold(&sender.escape(issue_key))
+            ),
             buttons,
         )
         .await?;
@@ -563,8 +575,8 @@ pub async fn handle_move_execute(
                 .send(
                     chat_id,
                     &format!(
-                        "Moved <b>{}</b> \u{2192} {}",
-                        sender.escape(issue_key),
+                        "Moved {} \u{2192} {}",
+                        sender.bold(&sender.escape(issue_key)),
                         sender.escape(status)
                     ),
                 )
@@ -600,7 +612,10 @@ pub async fn handle_comment_start(
     sender
         .send(
             chat_id,
-            &format!("Type a comment for <b>{}</b>:", sender.escape(issue_key)),
+            &format!(
+                "Type a comment for {}:",
+                sender.bold(&sender.escape(issue_key))
+            ),
         )
         .await?;
 
@@ -670,9 +685,8 @@ pub async fn handle_ticket_ask(
             .send(
                 chat_id,
                 &format!(
-                    "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\nWhat would you like to ask?",
-                    issue.url,
-                    sender.escape(&issue.key),
+                    "\u{1f4cb} {} \u{2014} {}\nStatus: {}\n\nWhat would you like to ask?",
+                    bold_issue_link(&sender, &issue.url, &issue.key),
                     sender.escape(&issue.summary),
                     sender.escape(&issue.status),
                 ),
@@ -707,13 +721,12 @@ pub async fn handle_ticket_ask(
             .send(
                 chat_id,
                 &format!(
-                    "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\nStatus: {}\n\n\u{1f4c2} <b>{}</b> | Branch: <code>{}</code>{}\n\nWhat would you like to ask?",
-                    issue.url,
-                    sender.escape(&issue.key),
+                    "\u{1f4cb} {} \u{2014} {}\nStatus: {}\n\n\u{1f4c2} {} | Branch: {}{}\n\nWhat would you like to ask?",
+                    bold_issue_link(&sender, &issue.url, &issue.key),
                     sender.escape(&issue.summary),
                     sender.escape(&issue.status),
-                    sender.escape(repo_name),
-                    sender.escape(&branch),
+                    sender.bold(&sender.escape(repo_name)),
+                    sender.code(&sender.escape(&branch)),
                     if clean { "" } else { " \u{26a0}\u{fe0f} dirty" },
                 ),
             )
@@ -755,9 +768,8 @@ pub async fn handle_ticket_ask(
         .send_with_keyboard(
             chat_id,
             &format!(
-                "\u{1f4cb} <b><a href=\"{}\">{}</a></b> \u{2014} {}\n\nSelect a repository:",
-                issue.url,
-                sender.escape(&issue.key),
+                "\u{1f4cb} {} \u{2014} {}\n\nSelect a repository:",
+                bold_issue_link(&sender, &issue.url, &issue.key),
                 sender.escape(&issue.summary),
             ),
             buttons,
