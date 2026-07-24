@@ -109,6 +109,10 @@ pub async fn slackmap_command() -> Result<(), AppError> {
             .as_ref()
             .map(|s| s.allowed_user_ids.clone())
             .unwrap_or_default(),
+        allowed_channel_ids: existing
+            .as_ref()
+            .map(|s| s.allowed_channel_ids.clone())
+            .unwrap_or_default(),
         admin_user_id: existing.as_ref().and_then(|s| s.admin_user_id.clone()),
         project_access: existing.map(|s| s.project_access).unwrap_or_default(),
     });

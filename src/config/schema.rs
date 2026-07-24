@@ -170,6 +170,13 @@ pub struct SlackConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_user_ids: Vec<String>,
 
+    /// Slack channel IDs the bot proactively listens to for regular (non-mention)
+    /// messages, e.g. ["C1234567"]. Empty = none — outside these channels the bot
+    /// only responds in DMs and when @-mentioned (via Slack's `app_mention` event),
+    /// regardless of this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_channel_ids: Vec<String>,
+
     /// Admin Slack user ID.  Only this user can run admin commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin_user_id: Option<String>,

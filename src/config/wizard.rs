@@ -471,6 +471,7 @@ fn collect_slack(existing: Option<&SlackConfig>) -> Result<Option<SlackConfig>, 
         bot_token: None,
         app_token: None,
         allowed_user_ids: vec![],
+        allowed_channel_ids: vec![],
         admin_user_id: None,
         project_access: std::collections::HashMap::new(),
     }))

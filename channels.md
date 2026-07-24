@@ -81,6 +81,11 @@ Slack is optional. There are two independent Slack modes that can run together:
 
 Enable only the interactive bot, only the poller, or both.
 
+The interactive bot listens for messages in three cases:
+- Direct messages (always).
+- @-mentions of the bot, in any channel it's a member of (always).
+- Plain messages (no mention needed) in channels listed in `allowed_channel_ids`.
+
 ---
 
 ### Slack App Setup
@@ -130,7 +135,7 @@ In **Slash Commands** → **Create New Command** for each command you want:
 
 Set **Request URL** to any placeholder (e.g. `https://placeholder.example.com`) — Socket Mode ignores it.
 
-#### Step 6 — Enable Event Subscriptions (for DM handling)
+#### Step 6 — Enable Event Subscriptions (for DM and channel handling)
 
 In **Event Subscriptions** → toggle **Enable Events** on.  
 In **Subscribe to bot events** add:
@@ -138,6 +143,15 @@ In **Subscribe to bot events** add:
 | Event | Purpose |
 |---|---|
 | `message.im` | Receive direct messages to the bot |
+| `app_mention` | Receive @-mentions of the bot in any channel it's in |
+| `message.channels` | Receive messages in public channels listed in `allowed_channel_ids` |
+| `message.groups` | Receive messages in private channels listed in `allowed_channel_ids` |
+
+`message.channels`/`message.groups` are only needed if you want the bot to listen to
+every message in specific channels (see `allowed_channel_ids` below). `app_mention`
+alone is enough if you only want the bot to respond when @-mentioned. Also invite the
+bot to any channel it should listen to (`/invite @YourBot`) and, for private channels,
+add the `groups:history` bot token scope alongside `channels:history`.
 
 #### Step 7 — User token (for legacy poller only)
 
@@ -170,6 +184,12 @@ app_token  = "xapp-..."
 # Empty list = everyone in the workspace is allowed.
 # Find your Slack user ID: click your name in Slack → profile → "Copy member ID".
 allowed_user_ids = ["U1234567", "U9876543"]
+
+# Channel IDs the bot proactively listens to (every message, not just mentions).
+# Empty list = none — outside these channels the bot only responds in DMs and
+# whenever it's @-mentioned, regardless of this list.
+# Find a channel ID: open the channel in Slack → "View channel details" → bottom of the panel.
+allowed_channel_ids = ["C1234567"]
 
 # Only this user can run /admin and manage permissions.
 admin_user_id = "U1234567"
@@ -259,10 +279,11 @@ BZ    = ["/home/you/code/blaze", "/home/you/code/blaze-infra"]
 [slack]
 user_token       = "xoxp-..."      # required (poller)
 poll_interval_ms = 30000
-bot_token        = "xoxb-..."      # optional (enables interactive bot)
-app_token        = "xapp-..."      # optional (enables Socket Mode)
-allowed_user_ids = ["U1234567"]
-admin_user_id    = "U1234567"
+bot_token          = "xoxb-..."      # optional (enables interactive bot)
+app_token          = "xapp-..."      # optional (enables Socket Mode)
+allowed_user_ids   = ["U1234567"]
+allowed_channel_ids = ["C1234567"]    # channels to listen to beyond DMs/mentions
+admin_user_id      = "U1234567"
 
 [slack.project_access]
 MYAPP = ["U1234567", "U9876543"]

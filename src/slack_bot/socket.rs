@@ -23,6 +23,7 @@ pub async fn run_socket_loop(
     ct: CancellationToken,
     state: Arc<AppState>,
     logger: &Arc<dyn Logger>,
+    bot_user_id: String,
 ) -> anyhow::Result<()> {
     let (bot_token, app_token) = {
         let sc = state
@@ -56,6 +57,7 @@ pub async fn run_socket_loop(
             logger,
             &bot_token,
             &app_token,
+            &bot_user_id,
         )
         .await
         {
@@ -91,6 +93,7 @@ async fn connect_and_run(
     logger: &Arc<dyn Logger>,
     bot_token: &str,
     app_token: &str,
+    bot_user_id: &str,
 ) -> anyhow::Result<()> {
     let wss_url = get_wss_url(app_token).await?;
     logger.info(
@@ -126,6 +129,7 @@ async fn connect_and_run(
                             Arc::clone(&state),
                             logger,
                             bot_token,
+                            bot_user_id,
                         )
                         .await
                         {
@@ -155,6 +159,7 @@ async fn handle_frame(
     state: Arc<AppState>,
     logger: &Arc<dyn Logger>,
     bot_token: &str,
+    bot_user_id: &str,
 ) -> anyhow::Result<()> {
     let envelope: SocketEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -187,7 +192,7 @@ async fn handle_frame(
             dispatch_interactive(state, logger, bot_token, &envelope.payload).await;
         }
         "events_api" => {
-            dispatch_event(state, logger, bot_token, &envelope.payload).await;
+            dispatch_event(state, logger, bot_token, bot_user_id, &envelope.payload).await;
         }
         other => {
             logger.debug(
@@ -420,6 +425,7 @@ async fn dispatch_event(
     state: Arc<AppState>,
     logger: &Arc<dyn Logger>,
     bot_token: &str,
+    bot_user_id: &str,
     payload: &serde_json::Value,
 ) {
     let event = match payload.get("event") {
@@ -433,14 +439,63 @@ async fn dispatch_event(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Only handle direct messages to the bot.
-    if event_type != "message" || channel_type != "im" {
+    // Skip bot's own messages / edits / joins etc.
+    if event.get("bot_id").is_some() || event.get("subtype").is_some() {
         return;
     }
 
-    // Skip bot's own messages.
-    if event.get("bot_id").is_some() || event.get("subtype").is_some() {
-        return;
+    // Decide whether this event should be handled at all, and if so whether the
+    // mention prefix (for app_mention events) needs stripping from the text:
+    //   - DMs are always handled.
+    //   - Plain channel/group messages are only handled in configured
+    //     `allowed_channel_ids` channels — and only if they're not also a mention
+    //     (mentions are handled once, via the "app_mention" branch, to avoid
+    //     double-dispatch when a listened channel also gets @-mentioned).
+    //   - app_mention fires for an @-mention in ANY channel, regardless of
+    //     `allowed_channel_ids` — "always listen if mentioned".
+    let is_mention = |text: &str| !bot_user_id.is_empty() && text.contains(bot_user_id);
+
+    let strip_mention = |text: &str| -> String {
+        if bot_user_id.is_empty() {
+            return text.trim().to_string();
+        }
+        let mention = format!("<@{bot_user_id}>");
+        text.replace(&mention, "").trim().to_string()
+    };
+
+    let raw_text = event
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    match event_type {
+        "message" if channel_type == "im" => {
+            // DMs: always handled, no mention stripping needed.
+        }
+        "message" => {
+            let channel_id = event
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let allowed = state
+                .config
+                .slack
+                .as_ref()
+                .map(|s| s.allowed_channel_ids.as_slice())
+                .unwrap_or(&[]);
+            if !allowed.iter().any(|c| c == channel_id) {
+                return;
+            }
+            if is_mention(&raw_text) {
+                // Let the "app_mention" event handle this instead.
+                return;
+            }
+        }
+        "app_mention" => {
+            // Always handled — "always listen if mentioned", any channel.
+        }
+        _ => return,
     }
 
     let user_id = event
@@ -455,17 +510,16 @@ async fn dispatch_event(
         .unwrap_or("")
         .to_string();
 
-    let text = event
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let text = if event_type == "app_mention" {
+        strip_mention(&raw_text)
+    } else {
+        raw_text.trim().to_string()
+    };
 
     if !state.slack_is_authorized(&user_id) {
         logger.warn(
-            "slack: unauthorized DM",
-            Some(&json!({ "user_id": user_id })),
+            "slack: unauthorized message",
+            Some(&json!({ "user_id": user_id, "channel_id": channel_id })),
         );
         return;
     }
@@ -476,7 +530,6 @@ async fn dispatch_event(
 
     let sender: Arc<dyn crate::channel::sender::ChannelSender> =
         Arc::new(SlackSender::new(bot_token.to_string()));
-    // For DMs, the channel_id IS the DM channel (same as user's conversation).
     let chat_id = channel_id.as_str();
 
     dispatch_dm_message(state, sender, chat_id, &user_id, &text, logger).await;
