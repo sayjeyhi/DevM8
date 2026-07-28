@@ -76,15 +76,15 @@ Slack is optional. There are two independent Slack modes that can run together:
 
 | Mode | Token needed | What it does |
 |---|---|---|
-| **Legacy poller** | `user_token` (xoxp-) | Polls DMs and forwards them to Telegram |
+| **Legacy poller** | `user_token` (xoxp-) | Polls DMs/group DMs (and channels listed in `allowed_channel_ids`) and forwards them to Telegram |
 | **Interactive bot** | `bot_token` (xoxb-) + `app_token` (xapp-) | Full bot: slash commands, buttons, session state |
 
 Enable only the interactive bot, only the poller, or both.
 
-The interactive bot listens for messages in three cases:
-- Direct messages (always).
-- @-mentions of the bot, in any channel it's a member of (always).
-- Plain messages (no mention needed) in channels listed in `allowed_channel_ids`.
+Both modes share the same `allowed_channel_ids` gate for public/private channels:
+- Direct messages and group DMs are always watched.
+- Public/private channels are only watched if listed in `allowed_channel_ids`.
+- The interactive bot additionally always responds to @-mentions, in any channel it's a member of, regardless of `allowed_channel_ids`.
 
 ---
 

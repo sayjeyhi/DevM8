@@ -37,10 +37,13 @@ pub type MessageHandler = Box<
 /// An error callback for non-fatal poller errors.
 pub type ErrorHandler = Box<dyn Fn(anyhow::Error) + Send + Sync>;
 
-/// Polls Slack for new DM/MPIM messages at a configured interval.
+/// Polls Slack for new messages at a configured interval. DMs and group DMs
+/// are always watched; public/private channels are only watched if listed in
+/// `allowed_channel_ids` (same semantics as the Socket Mode bot's channel gate).
 pub struct SlackPoller {
     client: Arc<SlackClient>,
     interval_ms: u64,
+    allowed_channel_ids: Vec<String>,
     on_message: Arc<MessageHandler>,
     on_error: Option<Arc<ErrorHandler>>,
     logger: Arc<dyn Logger>,
@@ -50,6 +53,7 @@ impl SlackPoller {
     pub fn new(
         client: Arc<SlackClient>,
         interval_ms: u64,
+        allowed_channel_ids: Vec<String>,
         on_message: MessageHandler,
         on_error: Option<ErrorHandler>,
         logger: Arc<dyn Logger>,
@@ -57,6 +61,7 @@ impl SlackPoller {
         Self {
             client,
             interval_ms,
+            allowed_channel_ids,
             on_message: Arc::new(on_message),
             on_error: on_error.map(Arc::new),
             logger,
@@ -145,6 +150,14 @@ impl SlackPoller {
 
             channel_cache.as_ref().unwrap().0.clone()
         };
+
+        // DMs/MPIMs are always watched; channels only if explicitly allowed.
+        let channels: Vec<SlackChannel> = channels
+            .into_iter()
+            .filter(|c| {
+                c.is_im || c.is_mpim || self.allowed_channel_ids.iter().any(|id| id == &c.id)
+            })
+            .collect();
 
         if channels.is_empty() {
             self.logger.debug("slack: no conversations to poll", None);

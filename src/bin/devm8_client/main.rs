@@ -79,6 +79,7 @@ enum Cmd {
 
     /// Attach an interactive `opencode` session to your active /ask worktree
     /// on the server, over Tailscale SSH.
+    #[command(name = "opencode")]
     OpenCode {
         /// OS account name the server's opencode-login binary is installed as,
         /// as set up by an admin (see the devm8 README's opencode-over-SSH section).

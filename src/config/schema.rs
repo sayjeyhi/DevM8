@@ -170,10 +170,11 @@ pub struct SlackConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_user_ids: Vec<String>,
 
-    /// Slack channel IDs the bot proactively listens to for regular (non-mention)
-    /// messages, e.g. ["C1234567"]. Empty = none — outside these channels the bot
-    /// only responds in DMs and when @-mentioned (via Slack's `app_mention` event),
-    /// regardless of this list.
+    /// Slack channel IDs to proactively watch, e.g. ["C1234567"]. Empty = none —
+    /// outside these channels, the interactive bot only responds in DMs and when
+    /// @-mentioned (via Slack's `app_mention` event), and the legacy poller only
+    /// forwards DMs/group DMs to Telegram. Public/private channels are otherwise
+    /// never watched, regardless of this list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_channel_ids: Vec<String>,
 

@@ -121,6 +121,7 @@ pub async fn start_polling(
         let bot_clone = bot.clone();
         let admin_id = config.telegram.admin_user_id;
         let interval_ms = slack_cfg.poll_interval_ms;
+        let allowed_channel_ids = slack_cfg.allowed_channel_ids.clone();
         let cancelled_clone = Arc::clone(&slack_cancel_flag);
         let logger_clone = Arc::clone(logger);
 
@@ -161,6 +162,7 @@ pub async fn start_polling(
             let poller = SlackPoller::new(
                 slack_client,
                 interval_ms,
+                allowed_channel_ids,
                 on_message,
                 None,
                 Arc::clone(&logger_clone),
