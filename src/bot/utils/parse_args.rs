@@ -8,17 +8,6 @@ pub fn parse_args(text: &str) -> Vec<String> {
     trimmed.split_whitespace().map(str::to_string).collect()
 }
 
-/// Split `input` into the first whitespace-delimited token and everything after.
-///
-/// Returns `None` when `input` contains fewer than two tokens.
-///
-/// # Examples
-/// ```
-/// assert_eq!(
-///     parse_first_and_rest("PROJ-1 fix the thing"),
-///     Some(("PROJ-1".into(), "fix the thing".into()))
-/// );
-/// ```
 /// Extract the uppercase project key from the first token of an issue-key string.
 /// E.g. "MYAPP-123 some text" → Some("MYAPP"), "notanissue" → None.
 pub fn project_key_from_args(args: &str) -> Option<String> {
@@ -30,6 +19,19 @@ pub fn project_key_from_args(args: &str) -> Option<String> {
     Some(prefix.to_uppercase())
 }
 
+/// Split `input` into the first whitespace-delimited token and everything after.
+///
+/// Returns `None` when `input` contains fewer than two tokens.
+///
+/// # Examples
+/// ```
+/// use devm8::bot::utils::parse_args::parse_first_and_rest;
+///
+/// assert_eq!(
+///     parse_first_and_rest("PROJ-1 fix the thing"),
+///     Some(("PROJ-1".into(), "fix the thing".into()))
+/// );
+/// ```
 pub fn parse_first_and_rest(input: &str) -> Option<(String, String)> {
     let mut iter = input.trim().splitn(2, char::is_whitespace);
     let first = iter.next()?.trim().to_string();

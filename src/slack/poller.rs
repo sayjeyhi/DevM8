@@ -329,7 +329,8 @@ impl SlackPoller {
             for reply in &replies {
                 new_last_reply_ts = Some(reply.ts.clone());
 
-                if is_own_message(own_user_id, &reply.user) || is_already_read(&last_read, &reply.ts)
+                if is_own_message(own_user_id, &reply.user)
+                    || is_already_read(&last_read, &reply.ts)
                 {
                     continue;
                 }

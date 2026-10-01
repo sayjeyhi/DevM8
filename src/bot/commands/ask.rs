@@ -608,7 +608,9 @@ pub async fn handle_worktree_branch_name_input(
 
     if let Some(pkey) = active_project_key {
         let channel = sender.channel_name();
-        let email = state.email_for_channel_user(channel, &pending.user_id).await;
+        let email = state
+            .email_for_channel_user(channel, &pending.user_id)
+            .await;
         if let Err(e) = state.db.set_active_project(&email, &pkey).await {
             state
                 .logger

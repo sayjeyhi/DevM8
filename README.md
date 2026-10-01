@@ -153,18 +153,21 @@ devm8-client login --server https://myserver.tailnet-name.ts.net:7887 --code ABC
 ```bash
 devm8-client login --server <url> --code <pairing-code>   # pair this machine
 devm8-client logout                                        # forget stored credentials
-devm8-client whoami                                         # show the logged-in identity
-devm8-client projects                                       # list accessible projects
-devm8-client ask [QUESTION...]                              # pick a project, then ask Claude (interactive if no question given)
-devm8-client solve <ISSUE-KEY>                              # run the /solve analysis flow
-devm8-client jira                                           # open the Jira menu (tickets, create, move, comment, account setup)
-devm8-client history [--limit N]                            # pick a project, then list its past sessions
-devm8-client history show <SESSION_ID>                      # show a session's full transcript
+devm8-client whoami                                        # show the logged-in identity
+devm8-client projects                                      # list accessible projects
+devm8-client ask [QUESTION...] [--project KEY]             # ask Claude (interactive REPL if no question given)
+devm8-client solve <ISSUE-KEY>                             # run the /solve analysis flow
+devm8-client pr-review <PR-URL>                            # review a GitHub pull request with Claude
+devm8-client jira                                          # open the Jira menu (tickets, create, move, comment, account setup)
+devm8-client history [--limit N] [--project KEY]           # pick a project, then list its past sessions
+devm8-client history show <SESSION_ID>                     # show a session's full transcript
+devm8-client update                                        # check for and apply devm8-client binary updates
+devm8-client opencode [--account NAME]                     # attach an opencode session to your active /ask worktree (Tailscale SSH)
 ```
 
-Running `devm8-client ask` with no question starts an interactive REPL — Ctrl-D to exit. When a response includes follow-up choices (branch/commit picker, cancel, etc.), they're printed as a numbered list; type the number to select one. `devm8-client jira` uses this same numbered-choice loop to drive the same menu Telegram's `/jira` command shows: My Tickets, Create Ticket, Move Ticket, Add Comment, Solve Ticket, and account settings (connect/reconnect/disconnect a personal Jira account, manage its accessible projects, and pick favorite statuses).
+Responses are rendered as terminal markdown — headers, styled code blocks, inline code — and while Claude works you get a live spinner showing the current progress line instead of a log of repeated updates. When a response includes follow-up choices (branch/commit picker, "Ready to implement?", …), they come up as an arrow-key menu: Enter picks one, Esc drops you back to a free-text prompt, Ctrl-C exits. `devm8-client jira` drives the same choice menus to show the same options Telegram's `/jira` command offers: My Tickets, Create Ticket, Move Ticket, Add Comment, Solve Ticket, and account settings (connect/reconnect/disconnect a personal Jira account, manage its accessible projects, and pick favorite statuses).
 
-Both `ask` and `history` (the listing form) prompt you to pick a project from your accessible projects before doing anything else.
+Both `ask` and `history` (the listing form) prompt you to pick a project from your accessible projects first — skipped automatically when you have exactly one project or pass `--project KEY`. In a terminal, `history` also offers an arrow-key picker to open any listed transcript. Everything degrades gracefully: piped/redirected output or `NO_COLOR` gives plain, script-friendly text with the classic `>` prompt and numbered choices.
 
 ### Notes
 

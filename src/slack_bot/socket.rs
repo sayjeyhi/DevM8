@@ -474,10 +474,7 @@ async fn dispatch_event(
             // DMs: always handled, no mention stripping needed.
         }
         "message" => {
-            let channel_id = event
-                .get("channel")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let channel_id = event.get("channel").and_then(|v| v.as_str()).unwrap_or("");
             let allowed = state
                 .config
                 .slack

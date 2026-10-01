@@ -47,7 +47,10 @@ fn format_tickets_page(
                 Some(uname) if !uname.is_empty() && sender.channel_name() == "telegram" => {
                     format!(
                         "  {}",
-                        sender.link(&format!("https://t.me/{}?start={}", uname, i.key), "[details]")
+                        sender.link(
+                            &format!("https://t.me/{}?start={}", uname, i.key),
+                            "[details]"
+                        )
                     )
                 }
                 _ => String::new(),

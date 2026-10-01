@@ -453,9 +453,7 @@ async fn action(
                 .await
             }
             "solve" => route_solve_action(sender, &chat_id, &email, &action_data, app_state).await,
-            "prreview" => {
-                handle_pr_review_action(sender, &chat_id, &action_data, app_state).await
-            }
+            "prreview" => handle_pr_review_action(sender, &chat_id, &action_data, app_state).await,
             "jira" => {
                 handle_jira_action(sender, &chat_id, &email, &action_data, None, app_state).await
             }

@@ -30,12 +30,14 @@ fn load_description_template(project_key: &str) -> Option<String> {
     } else {
         PATHS.config_dir.join(path)
     };
-    std::fs::read_to_string(&resolved).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(&resolved)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn build_improve_prompt(project_key: &str, title: &str) -> String {
-    let template =
-        load_description_template(project_key).unwrap_or_else(|| DEFAULT_DESCRIPTION_TEMPLATE.to_string());
+    let template = load_description_template(project_key)
+        .unwrap_or_else(|| DEFAULT_DESCRIPTION_TEMPLATE.to_string());
 
     format!(
         "You are a technical project manager improving a Jira ticket.\n\n\

@@ -163,7 +163,9 @@ pub async fn start_pr_review(
             sender.escape(&parsed.summary)
         )
     };
-    sender.edit_with_keyboard(&status_ref, &header, vec![]).await?;
+    sender
+        .edit_with_keyboard(&status_ref, &header, vec![])
+        .await?;
 
     if !parsed.comments.is_empty() {
         let detail = render_comments_detail(&sender, &parsed.comments);
