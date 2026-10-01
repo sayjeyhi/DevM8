@@ -115,6 +115,26 @@ fn resolve_which(tool: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// When `path` is a linked git worktree (its `.git` is a file containing
+/// `gitdir: <main>/.git/worktrees/<id>`), return the main repo's `.git`
+/// directory. Returns None for plain checkouts (`.git` is a directory) and
+/// for non-worktree or relative gitdir layouts.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linked_worktree_git_dir(path: &str) -> Option<String> {
+    let dot_git = std::path::Path::new(path).join(".git");
+    if dot_git.is_dir() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&dot_git).ok()?;
+    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
+    if !gitdir.starts_with('/') {
+        return None;
+    }
+    // "<repo>/.git/worktrees/<id>" -> "<repo>/.git"
+    let pos = gitdir.find("/.git/worktrees/")?;
+    Some(format!("{}/.git", &gitdir[..pos]))
+}
+
 pub struct ClaudeClient {
     config: ClaudeClientConfig,
     logger: Arc<dyn Logger>,
@@ -255,6 +275,18 @@ impl ClaudeClient {
                 if !extra_paths.contains(host_path) {
                     extra_paths.push(host_path.clone());
                 }
+            }
+        }
+
+        // A linked worktree's `.git` is a file pointing at an absolute gitdir
+        // under the main repo (`<repo>/.git/worktrees/<id>`). That path is
+        // hidden by the /home tmpfs (or read-only under /), so without this
+        // bind every git command in the sandbox fails with "not a git
+        // repository: <repo>/.git/worktrees/<id>". Read-write so git can
+        // update the shared object store, refs and the worktree index.
+        if let Some(cwd) = cwd {
+            if let Some(main_git_dir) = linked_worktree_git_dir(cwd) {
+                cmd.args(["--bind", main_git_dir.as_str(), main_git_dir.as_str()]);
             }
         }
 
@@ -647,4 +679,53 @@ check: ls -la {real}",
 
     #[cfg(not(unix))]
     format!("permission denied executing '{binary}'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn detects_linked_worktree_main_git_dir() {
+        let tmp = std::env::temp_dir().join(format!("devm8-wt-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["config", "user.email", "t@t.t"]);
+        git(&repo, &["config", "user.name", "t"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = tmp.join("repo").join(".worktrees").join("1");
+        git(
+            &repo,
+            &["worktree", "add", wt.to_str().unwrap(), "-b", "ask/x"],
+        );
+
+        // git may canonicalize symlinks (e.g. /tmp -> /private/tmp) when it
+        // writes the gitdir pointer, so compare against the canonical repo path.
+        let canonical_repo = std::fs::canonicalize(&repo).unwrap();
+        assert_eq!(
+            linked_worktree_git_dir(wt.to_str().unwrap()),
+            Some(canonical_repo.join(".git").to_string_lossy().into_owned())
+        );
+        // Plain checkout: `.git` is a directory, nothing to bind.
+        assert_eq!(linked_worktree_git_dir(repo.to_str().unwrap()), None);
+        assert_eq!(linked_worktree_git_dir("/nonexistent"), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
