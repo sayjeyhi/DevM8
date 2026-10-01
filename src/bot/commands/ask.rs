@@ -142,7 +142,8 @@ async fn send_repo_ready_message(
     repo_name: &str,
     git: &Arc<crate::git::GitClient>,
 ) -> Result<()> {
-    let _ = git.fetch("origin", "main").await;
+    let base = git.default_branch().await;
+    let _ = git.fetch("origin", &base).await;
     let (branch, clean, behind) =
         tokio::join!(git.current_branch(), git.is_clean(), git.commits_behind(),);
     let branch = branch.unwrap_or_else(|_| "unknown".into());
@@ -196,7 +197,8 @@ async fn session_keyboard(
     git: Option<&Arc<crate::git::GitClient>>,
 ) -> Vec<Vec<Button>> {
     let (commit_label, push_label, pull_label) = if let Some(g) = git {
-        let _ = g.fetch("origin", "main").await;
+        let base = g.default_branch().await;
+        let _ = g.fetch("origin", &base).await;
         let (changed, ahead, behind) = tokio::join!(
             g.changed_files_count(),
             g.commits_ahead(),
@@ -510,14 +512,22 @@ fn slugify(text: &str, max_words: usize) -> String {
 }
 
 /// Suggest a branch name for a new /ask worktree session, derived from the question text.
+/// A short random tail keeps sessions from colliding with the remote branch a previous
+/// session pushed under the same slug-derived name.
 fn suggest_ask_branch_name(question: &str, user_id: &str) -> String {
     let slug = slugify(question, 6);
     let suffix_start = user_id.len().saturating_sub(4);
     let user_suffix = &user_id[suffix_start..];
+    let unique: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(4)
+        .collect();
     if slug.is_empty() {
-        format!("ask/session-{}", user_suffix)
+        format!("ask/session-{}-{unique}", user_suffix)
     } else {
-        format!("ask/{}-{}", slug, user_suffix)
+        format!("ask/{}-{}-{unique}", slug, user_suffix)
     }
 }
 

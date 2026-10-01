@@ -110,11 +110,52 @@ impl GitClient {
         out.stdout.lines().filter(|l| !l.trim().is_empty()).count()
     }
 
-    /// Number of local commits not yet pushed to the upstream branch.
-    /// Returns 0 when no upstream is configured.
+    /// The remote's default branch (e.g. "main"), used as the base for worktrees
+    /// and ahead/behind bookkeeping. Falls back to "main" when it can't be resolved.
+    pub async fn default_branch(&self) -> String {
+        self.exec(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+            .await
+            .ok()
+            .filter(|o| o.exit_code == 0)
+            .and_then(|o| o.stdout.strip_prefix("origin/").map(str::to_string))
+            .unwrap_or_else(|| "main".into())
+    }
+
+    /// Return `true` when the current branch has an upstream configured.
+    async fn has_upstream(&self) -> bool {
+        self.exec(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+            .await
+            .map(|o| o.exit_code == 0)
+            .unwrap_or(false)
+    }
+
+    /// Return `true` when a local ref (e.g. `refs/remotes/origin/main`) exists.
+    async fn ref_exists(&self, refname: &str) -> bool {
+        self.exec(&["show-ref", "--verify", "--quiet", refname])
+            .await
+            .map(|o| o.exit_code == 0)
+            .unwrap_or(false)
+    }
+
+    /// Number of local commits not yet pushed. Prefers the branch's own
+    /// remote-tracking ref (`origin/<branch>`), which `git push` updates, so the
+    /// count drops to 0 after a push even while the branch keeps tracking the
+    /// base branch it was created from. Falls back to the upstream, then 0.
     pub async fn commits_ahead(&self) -> usize {
+        let range = if let Ok(branch) = self.current_branch().await {
+            let remote_ref = format!("refs/remotes/origin/{branch}");
+            if !branch.is_empty() && self.ref_exists(&remote_ref).await {
+                remote_ref
+            } else if self.has_upstream().await {
+                "@{u}".to_string()
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        };
         let out = self
-            .exec(&["rev-list", "--count", "@{u}..HEAD"])
+            .exec(&["rev-list", "--count", &format!("{range}..HEAD")])
             .await
             .unwrap_or_else(|_| GitOutput {
                 stdout: "0".into(),
@@ -164,27 +205,76 @@ impl GitClient {
         Ok(())
     }
 
-    /// Pull using the configured upstream tracking branch.
-    /// Falls back to `git pull <remote> <current-branch>` if no upstream is set.
+    /// Pull with rebase, stashing uncommitted changes first.
+    ///
+    /// Worktree session branches are based on the remote's default branch and
+    /// typically carry Claude's commits plus a dirty tree, so a plain
+    /// `git pull` fails with "Need to specify how to reconcile divergent
+    /// branches" or refuses outright on uncommitted changes. Rebase keeps the
+    /// session commits linear on top of the base branch, and the manual
+    /// stash/pop preserves uncommitted work while it runs. If the rebase
+    /// conflicts it is aborted so the worktree is left in a clean, usable state.
+    /// Falls back to `git pull --rebase <remote> <current-branch>` when no
+    /// upstream is configured.
     pub async fn pull(&self, remote: &str) -> Result<String> {
-        let has_upstream = self
-            .exec(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-            .await
-            .map(|o| o.exit_code == 0)
-            .unwrap_or(false);
-        if has_upstream {
-            self.run(&["pull"]).await
-        } else {
-            let branch = self.current_branch().await?;
-            self.run(&["pull", remote, &branch]).await
+        const AUTOSTASH_MSG: &str = "devm8: pull autostash";
+        let dirty = !self.is_clean().await.unwrap_or(true);
+        if dirty {
+            self.stash(Some(AUTOSTASH_MSG)).await?;
         }
+        let fallback_branch = if self.has_upstream().await {
+            None
+        } else {
+            Some(self.current_branch().await?)
+        };
+        let args: Vec<&str> = match &fallback_branch {
+            Some(branch) => vec!["pull", "--rebase", remote, branch],
+            None => vec!["pull", "--rebase"],
+        };
+        let out = self.exec(&args).await?;
+        let pulled = if out.exit_code == 0 {
+            // Rebase progress is reported on stderr, not stdout.
+            let text = if out.stdout.is_empty() {
+                out.stderr
+            } else {
+                out.stdout
+            };
+            Ok(text)
+        } else {
+            anyhow::bail!("git {} failed: {}", args.join(" "), out.stderr)
+        };
+        if pulled.is_err() {
+            // Leave the worktree usable instead of stuck mid-rebase; the pull
+            // error above stays the primary message.
+            let _ = self.exec(&["rebase", "--abort"]).await;
+        }
+        if dirty {
+            if let Err(pop_err) = self.stash_pop().await {
+                let note = format!(
+                    "uncommitted changes were saved to stash '{AUTOSTASH_MSG}' and could not be \
+                     restored automatically ({pop_err}); recover them with `git stash pop`"
+                );
+                return match pulled {
+                    Ok(out) => Ok(format!("{out}\n\nNote: {note}")),
+                    Err(e) => Err(anyhow::anyhow!("{e}\n\nNote: {note}")),
+                };
+            }
+        }
+        pulled
     }
 
-    /// Push the current branch and set the upstream.
+    /// Push the current branch. Sets the upstream only when none is configured,
+    /// so worktree session branches keep tracking the base branch they were
+    /// created from — that ref is what the ahead/behind counters and Pull
+    /// action measure against.
     pub async fn push(&self, remote: &str) -> Result<()> {
         let branch = self.current_branch().await?;
-        self.run(&["push", "--set-upstream", remote, &branch])
-            .await?;
+        if self.has_upstream().await {
+            self.run(&["push", remote, &branch]).await?;
+        } else {
+            self.run(&["push", "--set-upstream", remote, &branch])
+                .await?;
+        }
         Ok(())
     }
 
@@ -224,9 +314,12 @@ impl GitClient {
         }
     }
 
-    /// Create an isolated worktree for `user_id` at `origin/main`, checked out onto `branch`.
+    /// Create an isolated worktree for `user_id` checked out onto `branch`.
     /// Any previous worktree for the same user is removed first, and any existing local
-    /// branch with the same name is force-deleted so it always starts fresh from `origin/main`.
+    /// branch with the same name is force-deleted. The branch starts from the remote's
+    /// default branch — or, when the branch already exists on the remote, from that
+    /// remote branch, so reusing a name continues the previous work instead of
+    /// resetting to a state that `git push` would reject as non-fast-forward.
     /// The worktree is placed at `<repo>/.worktrees/<user_id>/`.
     /// `.worktrees/` is automatically added to the repo's `.gitignore`.
     /// `user_id` accepts both Telegram numeric strings and Slack "U…" IDs.
@@ -236,14 +329,26 @@ impl GitClient {
         if path.exists() {
             let _ = self.remove_worktree(user_id).await;
         }
-        let _ = self.exec(&["fetch", "origin", "main"]).await;
+        let branch_on_remote = self
+            .exec(&["ls-remote", "--heads", "origin", branch])
+            .await
+            .map(|o| o.exit_code == 0 && !o.stdout.is_empty())
+            .unwrap_or(false);
+        let (fetch_branch, start_point) = if branch_on_remote {
+            (branch.to_string(), format!("origin/{branch}"))
+        } else {
+            let base = self.default_branch().await;
+            (base.clone(), format!("origin/{base}"))
+        };
+        let _ = self.exec(&["fetch", "origin", &fetch_branch]).await;
         let _ = self.exec(&["branch", "-D", branch]).await;
         let path_str = path.to_string_lossy().into_owned();
-        self.run(&["worktree", "add", &path_str, "-b", branch, "origin/main"])
+        self.run(&["worktree", "add", &path_str, "-b", branch, &start_point])
             .await?;
-        // Set tracking so commits_behind/ahead and plain `git pull` work correctly.
+        // Point the branch at its start point so commits_behind/ahead, Pull and
+        // Push all agree on what the session branch syncs against.
         let _ = self
-            .exec(&["branch", "--set-upstream-to", "origin/main", branch])
+            .exec(&["branch", "--set-upstream-to", &start_point, branch])
             .await;
         Ok(path)
     }

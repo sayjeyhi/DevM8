@@ -640,7 +640,7 @@ pub async fn handle_solve_action_callback(
                 }
                 return ask_with_session(sender, chat_id, state, question).await;
             };
-            let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+            let suggested = suggest_solve_branch_name(issue_key);
             prompt_worktree_branch_name(
                 Arc::clone(&sender),
                 chat_id,
@@ -875,13 +875,14 @@ pub async fn handle_branch_choice(
                         .await?;
                     return Ok(());
                 }
-                let branch_name = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let branch_name = suggest_solve_branch_name(issue_key);
+                let base = g.default_branch().await;
                 state.logger.info(
                     "solve: creating branch",
                     Some(&json!({ "key": issue_key, "branch": &branch_name })),
                 );
                 if let Err(e) = g
-                    .checkout_new_branch_from_main(&branch_name, "origin", "main")
+                    .checkout_new_branch_from_main(&branch_name, "origin", &base)
                     .await
                 {
                     state.logger.error(
@@ -911,7 +912,7 @@ pub async fn handle_branch_choice(
                     .await?;
             }
             "new" => {
-                let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+                let suggested = suggest_solve_branch_name(issue_key);
                 state.logger.info(
                     "solve: awaiting branch name confirmation",
                     Some(&json!({ "key": issue_key, "suggested": &suggested })),
@@ -1100,7 +1101,7 @@ pub async fn handle_post_analysis_implement(
         return ask_with_session(sender, chat_id, state, question).await;
     };
 
-    let suggested = format!("devm8/{}", issue_key.to_lowercase().replace('/', "-"));
+    let suggested = suggest_solve_branch_name(issue_key);
     prompt_worktree_branch_name(
         Arc::clone(&sender),
         chat_id,
@@ -1180,4 +1181,20 @@ pub async fn handle_solve_repo_callback(
     }
 
     handle_branch_picker(Arc::clone(&sender), chat_id, state, user_id).await
+}
+
+/// Suggest a branch name for a /solve worktree session. A short random tail
+/// keeps re-solving the same ticket from colliding with the remote branch a
+/// previous session pushed under the same name.
+fn suggest_solve_branch_name(issue_key: &str) -> String {
+    let unique: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(4)
+        .collect();
+    format!(
+        "devm8/{}-{unique}",
+        issue_key.to_lowercase().replace('/', "-")
+    )
 }
