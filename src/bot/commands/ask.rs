@@ -511,23 +511,40 @@ fn slugify(text: &str, max_words: usize) -> String {
         .join("-")
 }
 
-/// Suggest a branch name for a new /ask worktree session, derived from the question text.
-/// A short random tail keeps sessions from colliding with the remote branch a previous
-/// session pushed under the same slug-derived name.
-fn suggest_ask_branch_name(question: &str, user_id: &str) -> String {
-    let slug = slugify(question, 6);
-    let suffix_start = user_id.len().saturating_sub(4);
-    let user_suffix = &user_id[suffix_start..];
+/// Short, git-safe tag identifying the user behind `user_id`, so suggested
+/// branch names show who created them. On the CLI path `user_id` is an email,
+/// where the local part is the recognizable bit; other channels use opaque ids
+/// (Telegram numerics, Slack U-ids) whose characters add no meaning, so they
+/// yield an empty tag and the suggestion relies on the unique tail alone.
+fn user_tag(user_id: &str) -> String {
+    user_id
+        .split_once('@')
+        .map(|(local, _)| slugify(local, 1))
+        .unwrap_or_default()
+}
+
+/// Suggest a branch name for a new /ask worktree session, derived from the
+/// question text, falling back to `project_key` when no question was typed yet
+/// (the CLI and repo-picker flows name the branch before asking anything). A
+/// short random tail keeps sessions from colliding with the remote branch a
+/// previous session pushed under the same slug-derived name.
+fn suggest_ask_branch_name(question: &str, user_id: &str, project_key: &str) -> String {
+    let mut slug = slugify(question, 6);
+    if slug.is_empty() {
+        slug = slugify(project_key, 3);
+    }
+    let tag = user_tag(user_id);
     let unique: String = uuid::Uuid::new_v4()
         .simple()
         .to_string()
         .chars()
         .take(4)
         .collect();
-    if slug.is_empty() {
-        format!("ask/session-{}-{unique}", user_suffix)
-    } else {
-        format!("ask/{}-{}-{unique}", slug, user_suffix)
+    match (slug.is_empty(), tag.is_empty()) {
+        (false, false) => format!("ask/{slug}-{tag}-{unique}"),
+        (false, true) => format!("ask/{slug}-{unique}"),
+        (true, false) => format!("ask/session-{tag}-{unique}"),
+        (true, true) => format!("ask/session-{unique}"),
     }
 }
 
@@ -701,7 +718,7 @@ pub async fn start_ask_session(
     } else {
         WorktreeReadyAction::AskQuestion(question.clone())
     };
-    let suggested = suggest_ask_branch_name(&question, user_id);
+    let suggested = suggest_ask_branch_name(&question, user_id, &project_key);
     prompt_worktree_branch_name(
         sender,
         chat_id,
@@ -1160,7 +1177,11 @@ pub async fn handle_ask_session_callback(
                 repo_name,
             },
         };
-        let suggested = suggest_ask_branch_name(question.as_deref().unwrap_or(""), user_id);
+        let suggested = suggest_ask_branch_name(
+            question.as_deref().unwrap_or(""),
+            user_id,
+            &project_key_for_session,
+        );
 
         return prompt_worktree_branch_name(
             Arc::clone(&sender),
@@ -1833,4 +1854,66 @@ pub async fn handle_ask_session_callback(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugify_strips_punctuation_and_caps_words() {
+        assert_eq!(
+            slugify("Fix the login bug, please!", 6),
+            "fix-the-login-bug-please"
+        );
+        assert_eq!(slugify("one two three four", 2), "one-two");
+        assert_eq!(slugify("  !!! ???  ", 6), "");
+    }
+
+    #[test]
+    fn user_tag_uses_email_local_part_only() {
+        assert_eq!(user_tag("jafar.rezaei@company.com"), "jafarrezaei");
+        assert_eq!(user_tag("123456789"), "");
+        assert_eq!(user_tag("U03ABCDEF"), "");
+        assert_eq!(user_tag(""), "");
+    }
+
+    #[test]
+    fn suggest_uses_question_slug_when_present() {
+        let name = suggest_ask_branch_name("Fix the login bug", "dev@corp.com", "eisa");
+        assert!(
+            name.starts_with("ask/fix-the-login-bug-dev-"),
+            "unexpected suggestion: {name}"
+        );
+        assert_eq!(name.rsplit('-').next().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn suggest_falls_back_to_project_key_without_question() {
+        let name = suggest_ask_branch_name("", "jafar@company.com", "EISA");
+        assert!(
+            name.starts_with("ask/eisa-jafar-"),
+            "unexpected suggestion: {name}"
+        );
+        assert_eq!(name.rsplit('-').next().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn suggest_with_opaque_user_id_omits_empty_tag() {
+        let name = suggest_ask_branch_name("", "123456789", "eisa");
+        assert!(
+            name.starts_with("ask/eisa-"),
+            "unexpected suggestion: {name}"
+        );
+    }
+
+    #[test]
+    fn suggest_with_nothing_recognizable_stays_git_safe() {
+        let name = suggest_ask_branch_name("", "", "");
+        assert!(
+            name.starts_with("ask/session-"),
+            "unexpected suggestion: {name}"
+        );
+        assert_eq!(name.rsplit('-').next().unwrap().len(), 4);
+    }
 }
