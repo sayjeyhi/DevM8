@@ -1,6 +1,7 @@
 mod config;
 mod render;
 mod sse;
+mod tui;
 mod ui;
 
 use std::io::Write;
@@ -58,6 +59,9 @@ enum Cmd {
         /// Project key, to skip the project picker
         #[arg(long)]
         project: Option<String>,
+        /// Force the linear, pipe-friendly UI instead of the full-screen TUI
+        #[arg(long)]
+        plain: bool,
     },
 
     /// Run the /solve analysis flow for a Jira issue
@@ -70,7 +74,11 @@ enum Cmd {
     },
 
     /// Open the Jira menu (My Tickets, Create, Move, Comment, Solve, account setup)
-    Jira,
+    Jira {
+        /// Force the linear, pipe-friendly UI instead of the full-screen TUI
+        #[arg(long)]
+        plain: bool,
+    },
 
     /// Browse persisted chat history
     History {
@@ -125,10 +133,14 @@ async fn run() -> Result<()> {
         Cmd::Logout => logout().await,
         Cmd::Whoami => whoami().await,
         Cmd::Projects => projects().await,
-        Cmd::Ask { question, project } => ask(question, project).await,
+        Cmd::Ask {
+            question,
+            project,
+            plain,
+        } => ask(question, project, plain).await,
         Cmd::Solve { issue_key } => solve(issue_key).await,
         Cmd::PrReview { url } => pr_review(url).await,
-        Cmd::Jira => jira().await,
+        Cmd::Jira { plain } => jira(plain).await,
         Cmd::History {
             action,
             limit,
@@ -390,7 +402,8 @@ async fn select_project(
     if ui::interactive() {
         let labels: Vec<String> = projects.iter().map(project_label).collect();
         match inquire::Select::new("Select a project", labels)
-            .with_help_message("↑/↓ to move · Enter to select")
+            .with_render_config(ui::prompt_theme())
+            .with_help_message("↑/↓ move · ↵ select")
             .raw_prompt()
         {
             Ok(picked) => return Ok(projects[picked.index].key.clone()),
@@ -484,15 +497,42 @@ async fn stream_and_render(
     Ok(last_choices)
 }
 
-async fn ask(question: Vec<String>, project_override: Option<String>) -> Result<()> {
+/// The opencode-style header box for interactive sessions: client version,
+/// project, identity, and server host — the context a session belongs to.
+fn session_header(creds: &Credentials, project: &str) -> String {
+    let host = Url::parse(&creds.server)
+        .ok()
+        .and_then(|u| match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => Some(format!("{h}:{p}")),
+            (Some(h), None) => Some(h.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| creds.server.clone());
+    let version = env!("DEVM8_VERSION");
+    ui::header_box(
+        &format!("devm8 v{version}"),
+        &[
+            ("project", project),
+            ("user", &creds.email),
+            ("server", &host),
+        ],
+    )
+}
+
+async fn ask(question: Vec<String>, project_override: Option<String>, plain: bool) -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
     let mut sink = TerminalSink::new(!ui::interactive());
     let project = select_project(&client, &creds, project_override).await?;
     let question = question.join(" ");
 
+    // The full-screen TUI replaces the linear REPL on real terminals.
+    if question.is_empty() && !plain && ui::interactive() {
+        return tui::run_session(client, creds, tui::SessionKind::Ask { project }).await;
+    }
+
     if !question.is_empty() {
-        println!("{}", ui::dim(&format!("▸ {question}")));
+        println!("{}", ui::accent(&format!("❯ {question}")));
         stream_and_render(
             &client,
             format!("{}/v1/ask", creds.server),
@@ -507,9 +547,10 @@ async fn ask(question: Vec<String>, project_override: Option<String>) -> Result<
         return Ok(());
     }
 
+    println!("{}", session_header(&creds, &project));
     println!(
         "{}",
-        ui::dim("Interactive session — Ctrl-C or Ctrl-D to exit · Esc skips the choice menu")
+        ui::dim("Interactive session — Ctrl-C or Ctrl-D exits · Esc opens the free-text prompt")
     );
     let pending = stream_and_render(
         &client,
@@ -531,7 +572,7 @@ enum UserInput {
     Exit,
 }
 
-const ASK_INSTEAD_LABEL: &str = "✎  Ask something else…";
+const ASK_INSTEAD_LABEL: &str = "Ask something else…";
 
 /// Prompts for the next REPL action: pick one of the pending choices (arrow
 /// keys when interactive) or type free text. Falls back to the plain
@@ -553,7 +594,8 @@ fn prompt_interactive(pending: Option<&PendingChoices>) -> Option<UserInput> {
         let mut labels: Vec<String> = pc.items.iter().map(|c| c.label.clone()).collect();
         labels.push(ASK_INSTEAD_LABEL.to_string());
         match inquire::Select::new("Choose an action", labels)
-            .with_help_message("↑/↓ to move · Enter to select · Esc to type instead")
+            .with_render_config(ui::prompt_theme())
+            .with_help_message("↑/↓ move · ↵ select · esc type instead")
             .raw_prompt()
         {
             Ok(picked) if picked.index < pc.items.len() => {
@@ -571,7 +613,10 @@ fn prompt_interactive(pending: Option<&PendingChoices>) -> Option<UserInput> {
 fn prompt_text_interactive() -> Option<UserInput> {
     use inquire::InquireError;
 
-    match inquire::Text::new("Message").prompt() {
+    match inquire::Text::new("Message")
+        .with_render_config(ui::prompt_theme())
+        .prompt()
+    {
         Ok(text) => Some(UserInput::FreeText(text)),
         Err(InquireError::OperationInterrupted) => Some(UserInput::Exit),
         // Esc on the text prompt: return to the previous prompt rather than
@@ -704,9 +749,14 @@ async fn pr_review(url: String) -> Result<()> {
 // picker from the menu itself, exactly as they would in Telegram.
 // ---------------------------------------------------------------------------
 
-async fn jira() -> Result<()> {
+async fn jira(plain: bool) -> Result<()> {
     let creds = config::load()?;
     let client = authed_client(&creds)?;
+
+    if !plain && ui::interactive() {
+        return tui::run_session(client, creds, tui::SessionKind::Jira).await;
+    }
+
     let mut sink = TerminalSink::new(!ui::interactive());
     let pending = stream_and_render(
         &client,
@@ -789,8 +839,9 @@ async fn history(
                         )
                     })
                     .collect();
-                if let Ok(picked) =
-                    inquire::Select::new("Open a transcript (Esc to quit)", labels).raw_prompt()
+                if let Ok(picked) = inquire::Select::new("Open a transcript (Esc to quit)", labels)
+                    .with_render_config(ui::prompt_theme())
+                    .raw_prompt()
                 {
                     show_transcript(&client, &creds, &sessions[picked.index].session_id).await?;
                 }

@@ -75,6 +75,11 @@ pub fn dim(s: &str) -> String {
 pub fn cyan(s: &str) -> String {
     styled(out_color(), "36", s)
 }
+/// Bright cyan — the accent color used for focus markers (`❯`) and the
+/// question echo, kept separate from `cyan` so the two can diverge later.
+pub fn accent(s: &str) -> String {
+    styled(out_color(), "96", s)
+}
 pub fn green(s: &str) -> String {
     styled(out_color(), "32", s)
 }
@@ -94,6 +99,18 @@ pub fn err_red(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+/// Current terminal width, clamped to a usable range so boxes and separators
+/// never collapse or overflow on odd window sizes (and degenerate to 80
+/// columns when the size is unavailable, e.g. piped output).
+pub fn term_width() -> usize {
+    let (w, _) = termimad::terminal_size();
+    (w as usize).clamp(40, 100)
+}
+
+// ---------------------------------------------------------------------------
 // Symbols
 // ---------------------------------------------------------------------------
 
@@ -102,7 +119,89 @@ pub const CROSS: &str = "✖";
 
 /// A short dim separator line between conversation turns.
 pub fn separator() -> String {
-    dim(&"─".repeat(16))
+    dim(&"─".repeat(term_width()))
+}
+
+/// The content of a header box, layout-computed once so both renderers —
+/// ANSI text for the linear mode ([`header_box`]) and ratatui spans for the
+/// TUI — draw the identical shape.
+pub struct HeaderData {
+    pub title: String,
+    pub rows: Vec<(String, String)>,
+    /// Visible columns of the widest row content (excluding the 4 columns of
+    /// border + padding every line carries).
+    pub content_width: usize,
+}
+
+/// Compute the shared header layout at `max_width` terminal columns.
+pub fn header_data(title: &str, rows: &[(&str, &str)], max_width: usize) -> HeaderData {
+    let inner_max = max_width.saturating_sub(5).max(8);
+    let label_width = rows
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let title_plain = truncate(title, inner_max);
+    let mut content_width = title_plain.chars().count() + 1;
+    let mut out_rows: Vec<(String, String)> = Vec::new();
+    for (label, value) in rows {
+        let budget = inner_max.saturating_sub(label_width + 2);
+        let value_plain = truncate(value, budget);
+        content_width = content_width.max(label_width + 2 + value_plain.chars().count());
+        out_rows.push(((*label).to_string(), value_plain));
+    }
+
+    HeaderData {
+        title: title_plain,
+        rows: out_rows,
+        content_width,
+    }
+}
+
+/// A rounded header box in the opencode style: dim border, bold title, and
+/// dim-labelled rows (e.g. `project  EISA`), labels padded to a shared
+/// column. Values are plain strings; the box truncates rows rather than
+/// wrapping so the shape always holds.
+pub fn header_box(title: &str, rows: &[(&str, &str)]) -> String {
+    let data = header_data(title, rows, term_width());
+    let label_width = data
+        .rows
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    // Every line is exactly `content_width + 4` columns wide:
+    //   top:    "╭─ " + title + " " + D×"─" + "╮"
+    //   row:    "│ " + label (padded) + "  " + value + P spaces + " │"
+    //   bottom: "╰" + B×"─" + "╯"
+    // Labels are padded before styling: ANSI-wrapped strings would break the
+    // visible-width arithmetic.
+    let dashes = data.content_width - data.title.chars().count() - 1;
+    let mut lines = vec![format!(
+        "{}{} {}",
+        dim("╭─ "),
+        bold(&data.title),
+        dim(&format!("{}╮", "─".repeat(dashes)))
+    )];
+    for (label, value) in &data.rows {
+        let pad = data.content_width - label_width - value.chars().count() - 2;
+        lines.push(format!(
+            "{} {}  {}{} {}",
+            dim("│"),
+            dim(&format!("{:<label_width$}", label)),
+            value,
+            " ".repeat(pad),
+            dim("│")
+        ));
+    }
+    lines.push(format!(
+        "{}{}",
+        dim("╰"),
+        dim(&format!("{}╯", "─".repeat(data.content_width + 2)))
+    ));
+    lines.join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -222,16 +321,52 @@ pub fn print_markdown(text: &str) {
     }
 }
 
-fn markdown_skin() -> MadSkin {
+/// The markdown skin. Shared by the linear renderer and the TUI (which uses
+/// it for wrapping/layout decisions only, styling spans itself).
+pub fn markdown_skin() -> MadSkin {
     let mut skin = MadSkin::default();
     for h in skin.headers.iter_mut() {
-        h.set_fg(Color::Cyan);
         h.compound_style.add_attr(Attribute::Bold);
     }
-    skin.inline_code = CompoundStyle::new(Some(Color::Yellow), None, Attribute::Bold.into());
+    skin.inline_code = CompoundStyle::new(Some(Color::Cyan), None, Attribute::Reset.into());
     skin.code_block.compound_style.set_fg(Color::Grey);
     skin.bullet.set_fg(Color::Cyan);
+    skin.quote_mark.set_fg(Color::DarkCyan);
+    skin.horizontal_rule.set_fg(Color::DarkCyan);
+    skin.table.compound_style.set_fg(Color::DarkCyan);
     skin
+}
+
+// ---------------------------------------------------------------------------
+// Prompt theme
+// ---------------------------------------------------------------------------
+
+/// The shared `inquire` render config: a bright-cyan `❯` focus marker for the
+/// active prompt and highlighted option, dim help messages and scroll hints,
+/// no `[?]` brackets — the quiet, single-accent look of opencode's TUI.
+pub fn prompt_theme() -> inquire::ui::RenderConfig<'static> {
+    use inquire::ui::{Attributes, Color, IndexPrefix, RenderConfig, StyleSheet, Styled};
+
+    let accent = StyleSheet::new().with_fg(Color::LightCyan);
+    let muted = StyleSheet::new().with_fg(Color::Grey);
+    let focused = StyleSheet::new()
+        .with_fg(Color::LightCyan)
+        .with_attr(Attributes::BOLD);
+
+    let mut theme = RenderConfig::default_colored()
+        .with_prompt_prefix(Styled::new("❯").with_style_sheet(accent))
+        .with_answered_prompt_prefix(Styled::new("·").with_style_sheet(muted))
+        .with_answer(StyleSheet::new().with_attr(Attributes::BOLD))
+        .with_help_message(muted)
+        .with_highlighted_option_prefix(Styled::new("❯").with_style_sheet(accent))
+        .with_scroll_up_prefix(Styled::new("↑").with_style_sheet(muted))
+        .with_scroll_down_prefix(Styled::new("↓").with_style_sheet(muted))
+        .with_selected_option(Some(focused))
+        .with_option_index_prefix(IndexPrefix::None)
+        .with_canceled_prompt_indicator(Styled::new("(cancelled)").with_style_sheet(muted));
+    // `prompt` has no builder method — set the field directly.
+    theme.prompt = StyleSheet::new().with_attr(Attributes::BOLD);
+    theme
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +422,97 @@ pub fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Strip all SGR/ANSI escape sequences so tests can assert on visible text.
+    fn plain(s: &str) -> String {
+        static RE: OnceLock<Regex> = OnceLock::new();
+        RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;]*m").unwrap())
+            .replace_all(s, "")
+            .into_owned()
+    }
+
+    #[test]
+    fn header_box_rows_are_equal_width_and_padded() {
+        let out = plain(&header_box(
+            "devm8 v1.2.3",
+            &[("project", "EISA"), ("user", "jafar@company.com")],
+        ));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 4, "title border + 2 rows + bottom border");
+        let widths: Vec<usize> = lines.iter().map(|l| l.chars().count()).collect();
+        assert!(widths.iter().all(|&w| w == widths[0]), "unequal: {out}");
+        assert!(lines[0].starts_with("╭─ devm8 v1.2.3"));
+        assert!(lines[0].ends_with('╮'));
+        assert!(lines[1].starts_with("│ project  EISA"));
+        assert!(lines[1].ends_with('│'));
+        assert!(lines[3].starts_with("╰"));
+        assert!(lines[3].ends_with('╯'));
+    }
+
+    #[test]
+    fn header_box_truncates_long_values() {
+        let long = "x".repeat(200);
+        let out = plain(&header_box("devm8", &[("server", &long)]));
+        for line in out.lines() {
+            assert!(
+                line.chars().count() <= 105,
+                "line overflows terminal cap: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn separator_spans_the_terminal_width() {
+        assert_eq!(plain(&separator()).chars().count(), term_width());
+        assert_eq!(plain(&separator()), "─".repeat(term_width()));
+    }
+
+    #[test]
+    #[ignore] // visual preview: cargo test --bin devm8-client -- --ignored --nocapture visual_preview
+    fn visual_preview() {
+        println!();
+        println!(
+            "{}",
+            header_box(
+                "devm8 v0.1.0",
+                &[
+                    ("project", "EISA"),
+                    ("user", "jafar@company.com"),
+                    ("server", "myserver.tailnet-name.ts.net:7887"),
+                ]
+            )
+        );
+        println!(
+            "{}",
+            dim("Interactive session — Ctrl-C or Ctrl-D exits · Esc opens the free-text prompt")
+        );
+        println!();
+        println!("{}", accent("❯ what's failing in the login flow?"));
+        println!();
+        print_markdown("## Analysis\n\nThe `login_handler` drops the **session cookie** on redirect.\n\n```bash\n$ cargo test login\nok. 3 passed\n```\n\n- point 1\n- point 2\n\n---\nsub-line");
+        println!();
+        println!("{}", separator());
+        println!();
+        println!("{}", accent("❯ and the branch situation?"));
+        println!();
+        println!("{}", dim("✻ Analyzing worktree…"));
+        println!();
+        println!(
+            "{}",
+            header_box(
+                "devm8",
+                &[
+                    ("project", "a-very-long-project-key-name-here"),
+                    ("server", &"x".repeat(120))
+                ]
+            )
+        );
+        println!();
+        println!(
+            "{}",
+            dim("(the prompt theme applies to live inquire menus, not printable here)")
+        );
+    }
 
     #[test]
     fn strip_html_removes_telegram_tags() {
