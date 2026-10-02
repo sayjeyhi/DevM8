@@ -5,7 +5,10 @@ use tokio::task::JoinHandle;
 use super::types::{Button, Keyboard, SentMessageRef};
 
 /// Platform-agnostic interface for sending messages and interacting with users.
+// clippy 1.99's double_must_use fires inside async_trait's generated code:
+// the macro adds #[must_use] to boxed fns that already return #[must_use] Results.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait ChannelSender: Send + Sync {
     /// Send a plain text message (may include platform markup).
     async fn send(&self, chat_id: &str, text: &str) -> Result<SentMessageRef>;

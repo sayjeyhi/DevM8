@@ -18,7 +18,10 @@ use crate::shared::errors::{AppError, ClaudeError};
 use super::types::{AskOptions, ClaudeClientConfig, UsageInfo};
 
 /// Abstraction over AI CLI tools (Claude, Kiro, etc.).
+// See the note on ChannelSender: async_trait + #[must_use] Results trip
+// clippy 1.99's double_must_use inside the macro expansion.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait AiClient: Send + Sync {
     async fn ask(&self, prompt: &str, opts: AskOptions) -> Result<(String, UsageInfo), AppError>;
 
